@@ -106,6 +106,10 @@ struct tinycli_toplevel_cmd_safe {
     bool warnIfPostInit;
 };
 
+extern int do_serialboot(void);
+static void tinyCLI_SerialBoot_(void);
+
+
 static bool tinyCLI_NameToCmdIndex_(struct tinycli_cmd const * const pCmds, size_t numCmds,
     char const * const pToken, size_t *pIndex);
 static void tinyCLI_PrintVersion_(void);
@@ -226,6 +230,7 @@ enum CmdId {
 
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
+    CMD_SERIALBOOT,
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -315,6 +320,7 @@ static const struct tinycli_cmd toplevelCmds[] = {
 #if IS_ENABLED(CONFIG_SERVICE_BEU)
     { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
 #endif
+    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and execute: SERIALBOOT", tinyCLI_SerialBoot_ },
 };
 
 static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
@@ -349,10 +355,16 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #if IS_ENABLED(CONFIG_SERVICE_BEU)
     { CMD_ECC,     false },
 #endif
+{ CMD_SERIALBOOT, true },
 };
 
 _Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootFlags), "arrays toplevelCmds and topLevelCmdSafeAfterBootFlags need to be same dimension");
 
+
+static void tinyCLI_SerialBoot_(void)
+{
+    do_serialboot();
+}
 
 /***********************************************************************/
 
