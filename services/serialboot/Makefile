@@ -25,7 +25,7 @@
 #
 #
 
-
-SRCS-y += services/serialboot/serialboot.c
+SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+	services/serialboot/serialboot.c
 
 INCLUDES += -Iservices/serialboot

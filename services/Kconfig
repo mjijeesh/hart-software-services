@@ -21,5 +21,6 @@ source "services/tinycli/Kconfig"
 source "services/usbdmsc/Kconfig"
 source "services/wdog/Kconfig"
 source "services/ymodem/Kconfig"
+source "services/serialboot/Kconfig"
 
 endmenu
