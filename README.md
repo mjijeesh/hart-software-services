@@ -1,3 +1,57 @@
+# SERIALBOOT
+
+Added the serialboot service.
+use the serialboot comamnd to downlaod a binary file to ddr and execute from ddr.
+The target-app used for the mpfs-bootloader can be used here as well.
+
+```
+..
+[4.274079] CLI boot interrupt timeout
+[4.279044] loop 397315 took 606529217 ticks (max 606529217 ticks)
+[4.286969] Initializing Boot Image ...
+[4.292029] Trying to get boot image via SPI ...
+[4.297949] Preparing to copy from SPI Flash +0x400 ...
+[4.304537] Attempting to read image header (1632 bytes) ...
+[4.312523] magic is 04078793 vs expected b007c0de or c08b8355
+[4.320066] Failed to get boot image, cannot decompress
+[4.326940] Trying to get boot image via MMC ...
+[4.332860] Attempting to select SDCARD ... Failed
+[4.390044] Attempting to select eMMC ... Failed
+>> help
+
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT 
+>> serialboot
+
+
+Ready for SFL transfer. Connect host script...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Uploading build/ddr/pfsoc_bios.bin (32576 bytes) -> 0x80000000...
+|====================| 100.0% (32576/32576 B)
+[MPFS-TERM] Transfer Complete (9.8 KB/s).
+[MPFS-TERM] Sending JUMP Command to boot application...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...
+[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).
+[SERIALBOOT] Returning to HSS TinyCLI.
+
+[14.432526] u54 State Change:  [Running] [Running] [Running] [Running]
+[14.441979] loop 1463774 took 2018520057 ticks (max 2018520057 ticks)
+>> [20.817499] loop 2500000 took 3621 ticks (max 2018520057 ticks)
+
+
+
+```
+
+
+
+
+
+
 # Hart Software Services
 
 This is the Hart Software Services (HSS) code.
