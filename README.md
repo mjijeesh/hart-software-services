@@ -1,8 +1,19 @@
 # SERIALBOOT
 
 Added the serialboot service.
-use the serialboot comamnd to downlaod a binary file to ddr and execute from ddr.
+use the serialboot command to download a binary file to ddr and execute from ddr location 0x80000000.
 The target-app used for the mpfs-bootloader can be used here as well.
+use the mpfs-terminal.py python app for the terminal app.
+
+start the terminal with the application file via the --kernel option 
+
+```
+$python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.bin
+
+```
+The mpfs-terminal.py can be used as a regular termianl without the --kernel option as well.
+
+
 
 ```
 ..
