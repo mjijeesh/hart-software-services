@@ -18,6 +18,14 @@
 #define MAX_FAILURES 256
 #define SYS_CYCLE_PER_SEC 600000000UL /* PolarFire SoC CPU Frequency (~600-667MHz) */
 
+#include "ssmb_ipi.h"
+
+#ifndef PRV_M
+#define PRV_M 3
+#endif
+
+
+
 /* Forward declarations */
 static inline uint64_t get_cycles(void);
 static inline bool uart_read_nonblock(uint8_t *ch);
@@ -26,7 +34,8 @@ static inline void uart_write_str(const char *str);
 static uint16_t sfl_crc16(const unsigned char *buffer, size_t len);
 static int boot_load_max_size(uintptr_t addr, size_t *max_size);
 static uint32_t get_uint32(const unsigned char *data);
-static void serialboot_jump(uintptr_t addr) __attribute__((noreturn));
+/* To: */
+static void serialboot_jump(uintptr_t addr);
 static int check_ack(void);
 
 /* ----------------- Hardware Abstraction Wrappers ----------------- */
@@ -100,21 +109,40 @@ static uint32_t get_uint32(const unsigned char *data)
 }
 
 /* ----------------- Launch Routine ----------------- */
+#include "ssmb_ipi.h"
+
+#ifndef PRV_M
+#define PRV_M 3
+#endif
+
+static TxId_t g_serialboot_txid = 1u;
 
 static void serialboot_jump(uintptr_t addr)
 {
-    mHSS_PRINTF("\nLaunching downloaded application at 0x%016lx...\n", addr);
+    mHSS_PRINTF("\n[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x%016lx...\n", addr);
 
-    /* Flush write buffers and instruction cache */
-    __asm__ __volatile__("fence" ::: "memory");
+    /* 1. Flush write buffers and instruction cache[cite: 5] */
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
     __asm__ __volatile__("fence.i" ::: "memory");
 
-    typedef void (*entry_func_t)(unsigned long, unsigned long, unsigned long);
-    entry_func_t entry = (entry_func_t)addr;
-    entry(0, 0, 0);
+    /* 2. Dispatch GOTO to ALL U54 cores (Harts 1 to 4) in Machine Mode (PRV_M)[cite: 5, 9] */
+    for (enum HSSHartId hart = HSS_HART_U54_1; hart <= HSS_HART_U54_4; hart++) {
+        IPI_Send(hart,
+                 IPI_MSG_GOTO,
+                 g_serialboot_txid++,
+                 PRV_M,
+                 (void *)addr,
+                 NULL);
+    }
 
-    while (1);
+    /* 3. Small hardware delay for all cores to unpark[cite: 5] */
+    for (volatile int i = 0; i < 200000; i++);
+
+    mHSS_PRINTF("[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).\n");
+    mHSS_PRINTF("[SERIALBOOT] Returning to HSS TinyCLI.\n\n");
 }
+
+
 
 /* ----------------- SFL Reception Engine ----------------- */
 
