@@ -1,5 +1,28 @@
 # SPI Flash Support
 
+use the defconfig_minimal_serialboot fiel  for mpfs-icle kit
+
+
+$make BOARD=mpfs-icicle-kit DEFCONFIG=boards/mpfs-icicle-kit/def_config_minimal_serialboot
+
+or 
+
+$cp boards/mpfs-icicle-kit/def_config_minimal_serialboot .
+
+alternatevely you can configure  using the menuconfig and enable serialboot SFL via CLI from the default ( defconfig)
+
+
+$make BOARD=mpfs-icicle-kit menuconfig
+
+$ make BOARD=mpfs-icicle-kit clean all
+
+
+once the building is done, program the hex fiel into env using belw command
+
+$ make BOARD=mpfs-icicle-kit program
+
+
+
 Added the SPI flash Support via the System Controller SPI.
 Now we can program the micron 1gB memory conencted to the System controlelr SPI with the same serialboot cmmand.
 
