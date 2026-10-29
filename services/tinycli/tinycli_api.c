@@ -110,11 +110,12 @@ struct tinycli_toplevel_cmd_safe {
     extern int do_serialboot(void);
     extern void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size);
     extern void do_flash_read_id(void);
+    extern void do_flashboot(uint32_t spi_offset);
 
     static void tinyCLI_SerialBoot_(void);
     static void tinyCLI_FlashWrite_(void);
     static void tinyCLI_FlashId_(void);
-
+    static void tinyCLI_FlashBoot_(void);
 #endif
 
 
@@ -244,6 +245,7 @@ enum CmdId {
     CMD_SERIALBOOT,
     CMD_FLASH_WRITE,
     CMD_FLASH_ID,
+    CMD_FLASHBOOT,
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -334,9 +336,10 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-   { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL: SERIALBOOT", tinyCLI_SerialBoot_ },
+    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL: SERIALBOOT", tinyCLI_SerialBoot_ },
     { CMD_FLASH_WRITE, "FLASH_WRITE", "Write DDR to Flash: FLASH_WRITE <spi_offset> <ram_addr> <size>", tinyCLI_FlashWrite_ },
     { CMD_FLASH_ID, "FLASH_ID", "Read SPI Flash JEDEC ID: FLASH_ID", tinyCLI_FlashId_ },
+    { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
 #endif
 };
 
@@ -376,6 +379,8 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
     { CMD_SERIALBOOT, true },
     { CMD_FLASH_WRITE, true },
     { CMD_FLASH_ID, true },
+    { CMD_FLASHBOOT, true },
+    
 #endif
 
 };
@@ -403,6 +408,18 @@ _Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootF
         mHSS_PRINTF("Usage: FLASH_WRITE <spi_offset> <ram_addr> <size>\n");
     }
 }
+
+static void tinyCLI_FlashBoot_(void)
+{
+    uint32_t offset = 0x00020000UL; /* Default offset from SFL flash write */
+
+    if (argc_tokenCount >= 2) {
+        offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[1]);
+    }
+
+    do_flashboot(offset);
+}
+
 #endif
 
 /***********************************************************************/

@@ -11,7 +11,7 @@ extern "C" {
 int do_serialboot(void);
 void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size);
 void do_flash_read_id(void);
-
+void do_flashboot(uint32_t spi_offset);
 #ifdef __cplusplus
 }
 #endif

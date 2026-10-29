@@ -316,3 +316,93 @@ void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size)
 
     mHSS_PRINTF("[FLASH_WRITE] Programming complete.\n\n");
 }
+
+/* Add to services/serialboot/serialboot.c */
+
+static inline bool is_valid_ram_addr(uintptr_t addr)
+{
+    /* LIM Scratchpad (0x08000000 - 0x08200000) */
+    if (addr >= 0x08000000UL && addr < 0x08200000UL) return true;
+
+    /* DDR Cached (0x80000000 - 0xC0000000) */
+    if (addr >= 0x80000000UL && addr < 0xC0000000UL) return true;
+
+    /* DDR Non-Cached (0xC0000000 - 0xE0000000) */
+    if (addr >= 0xC0000000UL && addr < 0xE0000000UL) return true;
+
+    return false;
+}
+
+
+static inline uint32_t get_uint32_le(const unsigned char *data)
+{
+    return ((uint32_t)data[0])       |
+           ((uint32_t)data[1] << 8)  |
+           ((uint32_t)data[2] << 16) |
+           ((uint32_t)data[3] << 24);
+}
+
+void do_flashboot(uint32_t spi_offset)
+{
+    uint8_t header[8];
+    uintptr_t dest_addr = 0x80000000UL;
+    uint32_t image_size = 0;
+    uint32_t read_offset = spi_offset;
+
+    mHSS_PRINTF("\n[FLASHBOOT] Reading FBI header from SPI Flash offset 0x%08X...\n", spi_offset);
+
+    FLASH_init();
+    FLASH_read(spi_offset, header, sizeof(header));
+
+    uint32_t w0_le = get_uint32_le(&header[0]);
+    uint32_t w1_le = get_uint32_le(&header[4]);
+
+    /* Case 1: [Length (4B), CRC32 (4B)] -> word 1 is a CRC, not RAM */
+    if (w0_le > 0 && w0_le < 0x04000000UL && !is_valid_ram_addr((uintptr_t)w1_le)) {
+        dest_addr   = 0x80000000UL;
+        image_size  = w0_le;
+        read_offset = spi_offset + 8;
+        mHSS_PRINTF("[FLASHBOOT] FBI [Length, CRC32] detected:\n");
+        mHSS_PRINTF("  Payload Size : %u bytes (0x%X)\n", image_size, image_size);
+        mHSS_PRINTF("  Payload CRC  : 0x%08X\n", w1_le);
+        mHSS_PRINTF("  Target DDR   : 0x%016lx\n", dest_addr);
+    }
+    /* Case 2: [Length (4B), RAM Addr (4B)] */
+    else if (w0_le > 0 && w0_le < 0x04000000UL && is_valid_ram_addr((uintptr_t)w1_le)) {
+        dest_addr   = (uintptr_t)w1_le;
+        image_size  = w0_le;
+        read_offset = spi_offset + 8;
+        mHSS_PRINTF("[FLASHBOOT] FBI [Length, Addr] detected: Addr=0x%016lx, Size=%u bytes\n", dest_addr, image_size);
+    }
+    /* Case 3: [RAM Addr (4B), Length (4B)] */
+    else if (is_valid_ram_addr((uintptr_t)w0_le) && w1_le > 0 && w1_le < 0x04000000UL) {
+        dest_addr   = (uintptr_t)w0_le;
+        image_size  = w1_le;
+        read_offset = spi_offset + 8;
+        mHSS_PRINTF("[FLASHBOOT] FBI [Addr, Length] detected: Addr=0x%016lx, Size=%u bytes\n", dest_addr, image_size);
+    }
+    /* Case 4: Raw binary fallback */
+    else {
+        dest_addr   = 0x80000000UL;
+        image_size  = 32576;
+        read_offset = spi_offset;
+        mHSS_PRINTF("[FLASHBOOT] Warning: No FBI header matched. Reading raw binary (32576 B) to 0x%016lx...\n", dest_addr);
+    }
+
+    mHSS_PRINTF("[FLASHBOOT] Copying %u bytes from SPI 0x%08X to DDR 0x%016lx...\n",
+                image_size, read_offset, dest_addr);
+    FLASH_read(read_offset, (uint8_t *)dest_addr, image_size);
+
+    /* Verify first 4 instruction words */
+    uint32_t *p_code = (uint32_t *)dest_addr;
+    mHSS_PRINTF("[FLASHBOOT] DDR First 4 Words: 0x%08X 0x%08X 0x%08X 0x%08X\n",
+                p_code[0], p_code[1], p_code[2], p_code[3]);
+
+    if (p_code[0] == 0xFFFFFFFFUL || p_code[0] == 0x00000000UL) {
+        mHSS_PRINTF("[FLASHBOOT] Error: Blank memory at execution address. Aborting boot.\n\n");
+        return;
+    }
+
+    mHSS_PRINTF("[FLASHBOOT] Launching application on U54 harts...\n");
+    serialboot_jump(dest_addr);
+}

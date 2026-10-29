@@ -66,8 +66,38 @@ sL5DdSMmkekro
 [361.994136] loop 57637434 took 2096632077 ticks (max 2096632077 ticks)
 
 
+```
+
+Now for booting fro mthe flash, use the `flashboot` command
 
 ```
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID FLASHBOOT 
+>>flashboot
+
+
+[FLASHBOOT] Reading FBI header from SPI Flash offset 0x00020000...
+[FLASHBOOT] FBI [Length, CRC32] detected:
+  Payload Size : 32576 bytes (0x7F40)
+  Payload CRC  : 0xE8C25A16
+  Target DDR   : 0x0000000080000000
+[FLASHBOOT] Copying 32576 bytes from SPI 0x00020008 to DDR 0x0000000080000000...
+[FLASHBOOT] DDR First 4 Words: 0x00000717 0x20070713 0x30571073 0x305027F3
+[FLASHBOOT] Launching application on U54 harts...
+
+[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...
+[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).
+[SERIALBOOT] Returning to HSS TinyCLI.
+
+[59.987425] u54 State Change:  [Running] [Running] [Running] [Running]
+
+
+```
+
+Note that before every boot command, the board need to be reset, we cannot boot into a u54 if it is already running.
+
+use either the `RESET` command or a hardware reset before starting boot from spi flash.
+
 
 29th October 2026
 
