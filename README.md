@@ -1,3 +1,78 @@
+# SPI Flash Support
+
+Added the SPI flash Support via the System Controller SPI.
+Now we can program the micron 1gB memory conencted to the System controlelr SPI with the same serialboot cmmand.
+
+```
+$python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.fbi --flash
+```
+
+use the command option `--flash` so taht serialboot can understand it is for spi flash. Also provide an 
+`.fbi` file instead of `.bin` file 
+
+use the `serialboot command from the hSS to start the downalod 
+
+```
+(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/mpfs-bootloader/target-app2$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.bin  --no-boot
+[MPFS-TERM] Opened /dev/ttyUSB0 at 115200 baud. (Press Ctrl+C to exit)
+[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
+
+help
+
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID 
+>> FL[48.190253] loop 7500000 took 3588 ticks (max 606533091 ticks)
+ASH
+
+[49.685835] Unknown command >>FLASH<< (1 tokens)
+
+>> flash_id
+
+
+[SPI_FLASH] JEDEC ID:
+ Manufacturer : 0x20 (Micron expected: 0x20)
+ Device Type  : 0xBA
+ Capacity ID  : 0x21
+
+>
+
+(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/mpfs-bootloader/target-app2$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.fbi  --flash
+[MPFS-TERM] Opened /dev/ttyUSB0 at 115200 baud. (Press Ctrl+C to exit)
+[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
+
+>> help
+
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID 
+>> serialboot
+
+
+Ready for SFL transfer. Connect host script...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Requesting SPI Flash erase/prep (32584 bytes) at Offset 0x00020000...
+[MPFS-TERM] Uploading build/ddr/pfsoc_bios.fbi (32584 bytes) -> 0x00020000...
+|====================| 100.0% (32584/32584 B)
+[MPFS-TERM] Transfer Complete (9.6 KB/s).
+[MPFS-TERM] Sending DONE command...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[FLASHWRITE] SPI Flash Direct Upload Complete!
+ Target Flash Addr  : 0x00020000
+ Total Written Size : 32584 bytes
+
+[361.994136] loop 57637434 took 2096632077 ticks (max 2096632077 ticks)
+
+
+
+```
+
+29th October 2026
+
+
+
 # SERIALBOOT
 
 Added the serialboot service.
