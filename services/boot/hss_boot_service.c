@@ -36,6 +36,10 @@
 
 #include "mpfs_reg_map.h"
 
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#include "serialboot.h"
+#endif
+
 #if IS_ENABLED(CONFIG_OPENSBI)
 #  include "sbi/riscv_asm.h"
 #  define ffs SBI_FFS
@@ -342,7 +346,11 @@ static bool check_for_ipi_acks(struct StateMachine * const pMyMachine)
 //
 static void boot_init_handler(struct StateMachine * const pMyMachine)
 {
+
+    
     if (HSS_Trigger_IsNotified(EVENT_DDR_TRAINED) && HSS_Trigger_IsNotified(EVENT_STARTUP_COMPLETE)) {
+
+        
         if (pBootImage) {
             //mHSS_DEBUG_PRINTF(LOG_NORMAL, "%s::\tstarting boot\n", pMyMachine->pMachineName);
             SYSREG->BOOT_FAIL_CR = 0;

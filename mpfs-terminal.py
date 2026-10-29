@@ -343,8 +343,9 @@ def main():
     # File Format Validation
     if args.kernel:
         ext = os.path.splitext(args.kernel)[1].lower()
-        if args.flash and ext != ".fbi":
-            print(f"{LOG_PREFIX} [ERROR] SPI Flash mode (--flash) requires a '.fbi' file. Received: '{ext}'")
+        
+        if not (args.kernel.endswith('.fbi') or args.kernel.endswith('.bin')):
+            print(f"[MPFS-TERM] [ERROR] SPI Flash mode (--flash) requires a '.fbi' or '.bin' file. Received: '{os.path.splitext(args.kernel)[1]}'")
             sys.exit(1)
         elif not args.flash and ext != ".bin":
             print(f"{LOG_PREFIX} [ERROR] Regular serialboot mode requires a '.bin' file. Received: '{ext}'")

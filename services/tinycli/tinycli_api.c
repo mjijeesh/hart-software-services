@@ -108,12 +108,10 @@ struct tinycli_toplevel_cmd_safe {
 
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     extern int do_serialboot(void);
-    extern void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size);
     extern void do_flash_read_id(void);
     extern void do_flashboot(uint32_t spi_offset);
 
     static void tinyCLI_SerialBoot_(void);
-    static void tinyCLI_FlashWrite_(void);
     static void tinyCLI_FlashId_(void);
     static void tinyCLI_FlashBoot_(void);
 #endif
@@ -243,7 +241,6 @@ enum CmdId {
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
     CMD_SERIALBOOT,
-    CMD_FLASH_WRITE,
     CMD_FLASH_ID,
     CMD_FLASHBOOT,
 };
@@ -337,7 +334,6 @@ static const struct tinycli_cmd toplevelCmds[] = {
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL: SERIALBOOT", tinyCLI_SerialBoot_ },
-    { CMD_FLASH_WRITE, "FLASH_WRITE", "Write DDR to Flash: FLASH_WRITE <spi_offset> <ram_addr> <size>", tinyCLI_FlashWrite_ },
     { CMD_FLASH_ID, "FLASH_ID", "Read SPI Flash JEDEC ID: FLASH_ID", tinyCLI_FlashId_ },
     { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
 #endif
@@ -377,7 +373,6 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, true },
-    { CMD_FLASH_WRITE, true },
     { CMD_FLASH_ID, true },
     { CMD_FLASHBOOT, true },
     
@@ -397,17 +392,7 @@ _Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootF
 {
     do_flash_read_id();
 }
-    static void tinyCLI_FlashWrite_(void)
-{
-    if (argc_tokenCount >= 4) {
-        uint32_t offset = tinyCLI_strtoul_wrapper_(argv_tokenArray[1]);
-        uintptr_t ram = tinyCLI_strtoul_wrapper_(argv_tokenArray[2]);
-        uint32_t size = tinyCLI_strtoul_wrapper_(argv_tokenArray[3]);
-        do_flash_write(offset, ram, size);
-    } else {
-        mHSS_PRINTF("Usage: FLASH_WRITE <spi_offset> <ram_addr> <size>\n");
-    }
-}
+    
 
 static void tinyCLI_FlashBoot_(void)
 {

@@ -1,3 +1,25 @@
+# SPI and Payload support.
+
+
+In this new version added the support for both  flashboot as well as hss payload boot option.
+
+use the hss-payload-generator to generate the payload binary file.
+
+use the mpfs-terminal to downlaod the fiel to the target spi flash .
+
+with the system control spi boot enabled, the hss will boot from the spi flash location 0x200000, 
+
+simialrly if wanted to use the .fbi file methid, downlaod that file via mpfs-termianl first.This is not supported by the default boot , so it will fail.
+ now use the flashboot comamnd to laod the binary and execute.
+
+ This way both methd can be used.
+
+
+Tested on icicle kit.
+
+29th October 2026.
+
+
 # SPI Flash Support
 
 use the defconfig_minimal_serialboot fiel  for mpfs-icle kit
