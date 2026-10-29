@@ -26,6 +26,10 @@
 #
 
 SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
-	services/serialboot/serialboot.c
+	services/serialboot/serialboot.c \
+	services/serialboot/micron1gflash.c \
+	services/serialboot/CoreSPI/core_spi.c \
+	services/serialboot/CoreSPI/hw_reg_access.c \
 
-INCLUDES += -Iservices/serialboot
+INCLUDES += -Iservices/serialboot \
+			-Iservices/serialboot/CoreSPI \
