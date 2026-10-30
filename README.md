@@ -3,7 +3,7 @@
 This is a modified version of HSS with below features added.
 
 *  Load  an application binary to DDR memory and execute.
-*  Load  an application binary ( payload) inot the SPI Flash.
+*  Upload an application binary ( payload format ) ino  the SPI Flash.
 *  Boot from SPI Flash ( System Controller SPI)
 
 The HSS is tested on the ICICLE kit with the standard reference design with CoreSPI Connected to the System Controller SPI interface.
