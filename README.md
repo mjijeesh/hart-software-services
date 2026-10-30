@@ -1,172 +1,123 @@
-# SPI and Payload support.
+# HSS with SerialBoot and SPI Flash Boot support
+
+This is a modified version of HSS with below features added.
+    *  Load  an application binary to DDR memory and execute.
+    *  Load  an application binary ( payload) inot the SPI Flash.
+    *  Boot from SPI Flash ( System Controller SPI)
+
+The HSS is tested on the ICICLE kit with the standard reference design with CoreSPI Connected to the System Controller SPI interface.
+
+# Build instructions.
+
+configure the build system to enable SerialBoot SFL Support under services.
 
 
-In this new version added the support for both  flashboot as well as hss payload boot option.
+Use the `menuconfig` command and select  `SerialBoot SFL Support` under services. 
+Also enable the `System Controller SPi Boot Option`
 
-use the hss-payload-generator to generate the payload binary file.
+`#/git/hart-software-services$ make BOARD=mpfs-icicle-kit menuconfig`
 
-use the mpfs-terminal to downlaod the fiel to the target spi flash .
+save the configuration into the `.config` file.
 
-with the system control spi boot enabled, the hss will boot from the spi flash location 0x200000, 
+alternatevely copy the preconfigured config file from the `board/mpfs-icicle-kit/` folder
 
-simialrly if wanted to use the .fbi file methid, downlaod that file via mpfs-termianl first.This is not supported by the default boot , so it will fail.
- now use the flashboot comamnd to laod the binary and execute.
+`#/git/hart-software-services$ cp boards/mpfs-icicle-kit/def_config_minimal_serialboot_payload   .config `
 
- This way both methd can be used.
+### Build the HSS
 
-
-Tested on icicle kit.
-
-29th October 2026.
-
-
-# SPI Flash Support
-
-use the defconfig_minimal_serialboot fiel  for mpfs-icle kit
-
-
-$make BOARD=mpfs-icicle-kit DEFCONFIG=boards/mpfs-icicle-kit/def_config_minimal_serialboot
-
-or 
-
-$cp boards/mpfs-icicle-kit/def_config_minimal_serialboot .
-
-alternatevely you can configure  using the menuconfig and enable serialboot SFL via CLI from the default ( defconfig)
-
-
-$make BOARD=mpfs-icicle-kit menuconfig
-
-$ make BOARD=mpfs-icicle-kit clean all
-
-
-once the building is done, program the hex fiel into env using belw command
-
-$ make BOARD=mpfs-icicle-kit program
-
-
-
-Added the SPI flash Support via the System Controller SPI.
-Now we can program the micron 1gB memory conencted to the System controlelr SPI with the same serialboot cmmand.
+`#/git/hart-software-services$  make BOARD=mpfs-icicle-kit clean all`
 
 ```
-$python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.fbi --flash
+CC        build/thirdparty/opensbi/lib/sbi/sbi_hfence.o
+ CC        build/services/opensbi/opensbi_ecall_exts.o
+ CPP       boards/mpfs-icicle-kit/hss-l2scratch.ld
+ LD        hss-l2scratch.elf
+ NM        hss-l2scratch.sym
+ BIN       hss-l2scratch.bin
+   text	   data	    bss	    dec	    hex	filename
+ 133108	  27584	 149008	 309700	  4b9c4	build/hss-l2scratch.elf
+ COMPRESS  build/hss-l2scratch.bin
+ CC        build/envm-wrapper/envm-wrapper_crt.o
+ CC        build/envm-wrapper/envm-wrapper_validate_crc.o
+ CC        build/envm-wrapper/envm-wrapper_stubs.o
+ CC        build/modules/misc/stack_guard.o
+ LD        hss-envm-wrapper.elf
+ NM        hss-envm-wrapper.sym
+ BIN       hss-envm-wrapper.bin
+ HEX       hss-envm-wrapper.hex
+16:28:15 INFO  - mpfsBootmodeProgrammer v3.7 started.
+16:28:15 INFO  - "/home/jijeesh/git/hart-software-services/build/bootmode1" is the output folder and the previous contents of this folder will be deleted.
+16:28:15 INFO  - Selected boot mode "1 - non-secure boot from eNVM" and working in directory "/home/jijeesh/git/hart-software-services/build".
+16:28:15 INFO  - Generating BIN file...
+16:28:15 INFO  - Generating header...
+16:28:15 INFO  - Generating HEX file...
+16:28:15 INFO  - Preparing for bitstream generation...
+16:28:15 INFO  - Generating bitstream...
+16:28:23 INFO  - Programming/verifying the target skipped because --dryrun was specified.
+16:28:23 INFO  - mpfsBootmodeProgrammer completed successfully.
+   text	   data	    bss	    dec	    hex	filename
+  89332	    416	 149632	 239380	  3a714	build/hss-envm-wrapper.elf
+
 ```
 
-use the command option `--flash` so taht serialboot can understand it is for spi flash. Also provide an 
-`.fbi` file instead of `.bin` file 
+### Program the target Board eNVM
 
-use the `serialboot command from the hSS to start the downalod 
+Once the build process is over , program the hss bootloader program into the target board envm.
+
+`#/git/hart-software-services$  make BOARD=mpfs-icicle-kit program`
 
 ```
-(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/mpfs-bootloader/target-app2$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.bin  --no-boot
+INFO: Linux detected
+INFO: Linux Desktop detected
+mpfs-icicle-kit selected
+INFO: Using xPack GNU RISC-V Embedded GCC (riscv-none-elf 15.2.0)
+INFO: NOTICE: enabling -flto (which means stack protection is disabled)
+INFO: Expected mpfsBootmodeProgrammer.jar version v3.6 but found v3.7
+INFO: This version of the HSS relies on SoftConsole v2021.3 or later
+INFO: Using xPack GNU RISC-V Embedded GCC (riscv-none-elf 15.2.0)
+16:29:15 INFO  - mpfsBootmodeProgrammer v3.7 started.
+16:29:15 INFO  - "/home/jijeesh/git/hart-software-services/build/bootmode1" is the output folder and the previous contents of this folder will be deleted.
+16:29:15 INFO  - Selected boot mode "1 - non-secure boot from eNVM" and working in directory "/home/jijeesh/git/hart-software-services/build".
+16:29:15 INFO  - Generating BIN file...
+16:29:15 INFO  - Generating header...
+16:29:15 INFO  - Generating HEX file...
+16:29:15 INFO  - Preparing for bitstream generation...
+16:29:15 INFO  - Generating bitstream...
+16:29:23 INFO  - Programming the target...
+16:29:34 INFO  - mpfsBootmodeProgrammer completed successfully.
+```
+
+
+# Loading Application Binary to DDR over UART.
+
+After programming the  new hss reset the board and connect a termianl program to the uart port.
+Use the provided `mpfs-terminal.py` python application for supporting the serialboot function.
+The script is supported in both linux and windows.
+
+copy your application binary(.bin)  which is build to run from ddr memory to the current folder.
+
+To use the python script for just as termianl application use the below comamnd.
+
+`#/git/hart-software-services$ python3 mpfs-terminal.py  /dev/ttyUSB0`
+
+if serialboot is needed , below command format can be used. `build/ddr/pfsoc_bios.bin` is the target baremetal binary file
+
+
+`#/git/hart-software-services$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.bin`
+
+Once the termianl is opened, reset the board  and interrupt  the autobooting from spi/emmc/sdcard if enabled.
+
+Use the `HELP` command to see available commands. 
+
+We should see additional  commands `SERIALBOOT FLASH_ID FLASHBOOT` 
+
+type the `serialboot` command to start downlaoding the bianry file into the ddr memory and start executing from there.
+
+
+```
 [MPFS-TERM] Opened /dev/ttyUSB0 at 115200 baud. (Press Ctrl+C to exit)
 [MPFS-TERM] Type 'serialboot' on prompt to trigger download.
 
-help
-
-Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID 
->> FL[48.190253] loop 7500000 took 3588 ticks (max 606533091 ticks)
-ASH
-
-[49.685835] Unknown command >>FLASH<< (1 tokens)
-
->> flash_id
-
-
-[SPI_FLASH] JEDEC ID:
- Manufacturer : 0x20 (Micron expected: 0x20)
- Device Type  : 0xBA
- Capacity ID  : 0x21
-
->
-
-(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/mpfs-bootloader/target-app2$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.fbi  --flash
-[MPFS-TERM] Opened /dev/ttyUSB0 at 115200 baud. (Press Ctrl+C to exit)
-[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
-
->> help
-
-Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID 
->> serialboot
-
-
-Ready for SFL transfer. Connect host script...
-sL5DdSMmkekro
-
-[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
-[MPFS-TERM] Requesting SPI Flash erase/prep (32584 bytes) at Offset 0x00020000...
-[MPFS-TERM] Uploading build/ddr/pfsoc_bios.fbi (32584 bytes) -> 0x00020000...
-|====================| 100.0% (32584/32584 B)
-[MPFS-TERM] Transfer Complete (9.6 KB/s).
-[MPFS-TERM] Sending DONE command...
-[MPFS-TERM] Terminal active. Continuing console output...
-
-
-[FLASHWRITE] SPI Flash Direct Upload Complete!
- Target Flash Addr  : 0x00020000
- Total Written Size : 32584 bytes
-
-[361.994136] loop 57637434 took 2096632077 ticks (max 2096632077 ticks)
-
-
-```
-
-Now for booting fro mthe flash, use the `flashboot` command
-
-```
-Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_WRITE FLASH_ID FLASHBOOT 
->>flashboot
-
-
-[FLASHBOOT] Reading FBI header from SPI Flash offset 0x00020000...
-[FLASHBOOT] FBI [Length, CRC32] detected:
-  Payload Size : 32576 bytes (0x7F40)
-  Payload CRC  : 0xE8C25A16
-  Target DDR   : 0x0000000080000000
-[FLASHBOOT] Copying 32576 bytes from SPI 0x00020008 to DDR 0x0000000080000000...
-[FLASHBOOT] DDR First 4 Words: 0x00000717 0x20070713 0x30571073 0x305027F3
-[FLASHBOOT] Launching application on U54 harts...
-
-[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...
-[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).
-[SERIALBOOT] Returning to HSS TinyCLI.
-
-[59.987425] u54 State Change:  [Running] [Running] [Running] [Running]
-
-
-```
-
-Note that before every boot command, the board need to be reset, we cannot boot into a u54 if it is already running.
-
-use either the `RESET` command or a hardware reset before starting boot from spi flash.
-
-
-29th October 2026
-
-
-
-# SERIALBOOT
-
-Added the serialboot service.
-use the serialboot command to download a binary file to ddr and execute from ddr location 0x80000000.
-The target-app used for the mpfs-bootloader can be used here as well.
-use the mpfs-terminal.py python app for the terminal app.
-
-start the terminal with the application file via the --kernel option 
-
-```
-$python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel build/ddr/pfsoc_bios.bin
-
-```
-The mpfs-terminal.py can be used as a regular termianl without the --kernel option as well.
-
-
-
-```
-..
 [4.274079] CLI boot interrupt timeout
 [4.279044] loop 397315 took 606529217 ticks (max 606529217 ticks)
 [4.286969] Initializing Boot Image ...
@@ -181,7 +132,7 @@ The mpfs-terminal.py can be used as a regular termianl without the --kernel opti
 >> help
 
 Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT 
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
 >> serialboot
 
 
@@ -208,9 +159,158 @@ sL5DdSMmkekro
 
 ```
 
+Now check your application terminal if any and verify that the program is running from other harts.
+
+Note : dont use the payload bianry format for this .
+
+
+# Downloading a binary Payload into the SPI flash and boot
+
+This version of hss also provide support for the micron spi flash driver and we can downlaod a payload binary into the spi flash.
+
+
+### build the payload binary.
+
+We need to build the payload binary using the `hss-payload-generator` tools.
+
+build the `hss-payload-generator` tool using the original instructions.
+
+
+`#/git/hart-software-services$/tools/hss-payload-generator$ make clean all`
+
+copy your test application  `app.elf`to the working directory.
+
+generate the payload binary using the below command. an example `baremetal.yaml` file is provided  in the test folder.
+
+ modify to match your file name. here  output file is `payload.bin`
+
+`./hss-payload-generator  -c test/baremetal.yaml  payload.bin`
+
+```
+Hart Software Service formatted boot image generator v0.99.53
+Copyright (c) 2021-2026 Microchip FPGA Embedded Systems Solutions.
+
+NOTICE: test/pfsoc_bios.elf: ignoring >>exec-addr=0x80000000<< as payload is an ELF file
+
+Set-name is >>PolarFire-SoC-HSS::pfsoc_bios<<
+Output filename is >>payload.bin<<
+
+```
+
+### Load the Payload binary using mpfs-terminal
+
+Use the mpfs-terminal python app to load the `payload.bin` to target spi flash memory.
+use the `--flash` option to specify the target location is spiflash and not ddr.
+
+`#/git/hart-software-services$ python3 mpfs-terminal.py  /dev/ttyUSB0 --kernel tools/hss-payload-generator/baremetal.bin --flash`
+
+by default the target spi flash adress  offset is 0x20000 . to match this to your hss boot offset for spi, you can also specify the target addr using the   `--kernel-adr` option
+
+eg: `--kernel-adr 0x400 `
+
+
+Use the `flash_id` command to verify the spi flash interface is enabled and proper.
+`serialboot` command with --flash option will upload the payload.bin file to SPI flash memory.
+
+once the upload of the file is  completed, we can use the  `spi` command to change the boot media, followed by `boot` command.
+
+
+```
+[MPFS-TERM] Opened /dev/ttyUSB0 at 115200 baud. (Press Ctrl+C to exit)
+[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
+
+>>help
+
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
+
+[2849.361699] loop 448149533 took 4286259205 ticks (max 4286259205 ticks)
+>> flash_id
+
+[SPI_FLASH] JEDEC ID:
+ Manufacturer : 0x20 (Micron expected: 0x20)
+ Device Type  : 0xBA
+ Capacity ID  : 0x21
+
+>>serialboot
+
+[2842.218024] Command SERIALBOOT may cause problems post boot.
 
 
 
+Ready for SFL transfer. Connect host script...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Requesting SPI Flash erase/prep (67328 bytes) at Offset 0x00020000...
+[MPFS-TERM] Uploading tools/hss-payload-generator/payload.bin (67328 bytes) -> 0x00020000...
+|====================| 100.0% (67328/67328 B)
+[MPFS-TERM] Transfer Complete (9.6 KB/s).
+[MPFS-TERM] Sending DONE command...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[FLASHWRITE] SPI Flash Direct Upload Complete!
+ Target Flash Addr  : 0x00020000
+ Total Written Size : 67328 bytes
+
+[2849.361699] loop 448149533 took 4286259205 ticks (max 4286259205 ticks)
+
+Supported commands:
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
+>> spi
+
+[7.651236] Selecting SPI Flash as boot source ...
+>> boot
+
+[9.612612] Initializing Boot Image ...
+[9.617672] Preparing to copy from SPI Flash +0x20000 ...
+[9.624451] Attempting to read image header (1632 bytes) ...
+[9.632437] Copying 67328 bytes to 0x103fc00000
+[9.677955] SPI: Boot Image registered ...
+[9.683406] Boot image set name: "PolarFire-SoC-HSS::pfsoc_bios"
+[9.690853] boot_service(u54_1):: BOOT_FLAG_SKIP_OPENSBI found
+[9.698396] boot_service(u54_1) :: [Init] -> [SetupPMP]
+[9.705271] boot_service(u54_2):: BOOT_FLAG_SKIP_OPENSBI found
+[9.712814] boot_service(u54_2) :: [Init] -> [SetupPMP]
+[9.719688] boot_service(u54_3):: BOOT_FLAG_SKIP_OPENSBI found
+[9.727231] boot_service(u54_3) :: [Init] -> [SetupPMP]
+[9.734106] boot_service(u54_4):: BOOT_FLAG_SKIP_OPENSBI found
+[9.741649] boot_service(u54_4) :: [Init] -> [SetupPMP]
+>> [9.748810] boot_service(u54_1) :: [SetupPMP] -> [SetupPMPComplete]
+[9.756830] boot_service(u54_2) :: [SetupPMP] -> [SetupPMPComplete]
+[9.764850] boot_service(u54_3) :: [SetupPMP] -> [SetupPMPComplete]
+[9.772871] boot_service(u54_4) :: [SetupPMP] -> [SetupPMPComplete]
+[9.780891] u54 State Change:  [Booting] [Booting] [Booting] [Booting]
+[9.790248] boot_service(u54_1) :: [SetupPMPComplete] -> [ZeroInit]
+[9.798268] boot_service(u54_2) :: [SetupPMPComplete] -> [ZeroInit]
+[9.806289] boot_service(u54_3) :: [SetupPMPComplete] -> [ZeroInit]
+[9.814309] boot_service(u54_4) :: [SetupPMPComplete] -> [ZeroInit]
+[9.823058] boot_service(u54_1) :: [ZeroInit] -> [Download]
+[9.830315] boot_service(u54_2) :: [ZeroInit] -> [Download]
+[9.837571] boot_service(u54_3) :: [ZeroInit] -> [Download]
+[9.844828] boot_service(u54_4) :: [ZeroInit] -> [Download]
+[9.852084] boot_service(u54_1)::Processing boot image: "baremetal+pfsoc_bios"
+[9.860869] boot_service(u54_2) :: [Download] -> [Complete]
+[9.868125] boot_service(u54_3) :: [Download] -> [Complete]
+[9.875382] boot_service(u54_4) :: [Download] -> [Complete]
+[9.884409] boot_service(u54_1) :: [Download] -> [OpenSBIInit]
+[9.893176] boot_service(u54_1) :: [OpenSBIInit] -> [Wait]
+[9.912775] u54 State Change:  [Booting] [Running] [Running] [Running]
+[9.922410] boot_service(u54_1) :: [Wait] -> [Complete]
+[9.933164] u54 State Change:  [Running] [Running] [Running] [Running]
+[9.942521] boot_service(u54_1) :: [Complete] -> [Idle]
+[9.949396] boot_service(u54_2) :: [Complete] -> [Idle]
+[9.956270] boot_service(u54_3) :: [Complete] -> [Idle]
+[9.963145] boot_service(u54_4) :: [Complete] -> [Idle]
+[17.67100] loop 2500000 took 3722 ticks (max 394341623 ticks)
+
+
+
+```
+
+
+30th October 2026
 
 
 # Hart Software Services
