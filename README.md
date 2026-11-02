@@ -6,8 +6,8 @@ This is a modified version of HSS with below features added.
 *  Upload an application binary ( payload format ) ino  the SPI Flash.
 *  Boot from SPI Flash ( System Controller SPI)
 
-The HSS is tested on the ICICLE kit with the standard reference design with CoreSPI Connected to the System Controller SPI interface.
-
+The HSS is tested on the ICICLE kit with the  modified standard reference design with CoreSPI Connected to the System Controller SPI interface.
+CoreSPI base Adress is at 0x40000600
 # Build instructions.
 
 configure the build system to enable SerialBoot SFL Support under services.

@@ -19,7 +19,7 @@
 #if defined(FLASH_USE_CORE_SPI)
 #include "core_spi.h"
 #ifndef FLASH_CORESPI_BASE_ADDR
-#define FLASH_CORESPI_BASE_ADDR   0x40000000UL
+#define FLASH_CORESPI_BASE_ADDR   0x40000600UL
 #endif
 #else
 #include "mss_spi.h"
