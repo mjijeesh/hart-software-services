@@ -1,5 +1,8 @@
 # HSS with SerialBoot and SPI Flash Boot support
 
+brnach: flashboot4 : add a generic spi flash driver for different board , wip
+
+
 This is a modified version of HSS with below features added.
 
 *  Load  an application binary to DDR memory and execute.
