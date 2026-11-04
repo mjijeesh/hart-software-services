@@ -294,7 +294,7 @@ Once the termianl is opened, reset the board  and interrupt  the autobooting fro
 
 Use the `HELP` command to see available commands. 
 
-We should see additional  commands `SERIALBOOT FLASH_ID FLASHBOOT` 
+We should see additional  commands `SERIALBOOT FLASHID FLASHBOOT` 
 
 type the `serialboot` command to start downlaoding the bianry file into the ddr memory and start executing from there.
 
@@ -317,7 +317,7 @@ type the `serialboot` command to start downlaoding the bianry file into the ddr 
 >> help
 
 Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASHID FLASHBOOT 
 >> serialboot
 
 
@@ -394,7 +394,7 @@ by default the target spi flash adress  offset is 0x20000 . to match this to you
 eg: `--kernel-adr 0x400 `
 
 
-Use the `flash_id` command to verify the spi flash interface is enabled and proper.
+Use the `FLASHID` command to verify the spi flash interface is enabled and proper.
 `serialboot` command with --flash option will upload the payload.bin file to SPI flash memory.
 
 once the upload of the file is  completed, we can use the  `spi` command to change the boot media, followed by `boot` command.
@@ -407,10 +407,10 @@ once the upload of the file is  completed, we can use the  `spi` command to chan
 >>help
 
 Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASHID FLASHBOOT 
 
 [2849.361699] loop 448149533 took 4286259205 ticks (max 4286259205 ticks)
->> flash_id
+>> FLASHID
 
 [SPI_FLASH] JEDEC ID:
  Manufacturer : 0x20 (Micron expected: 0x20)
@@ -442,7 +442,7 @@ sL5DdSMmkekro
 [2849.361699] loop 448149533 took 4286259205 ticks (max 4286259205 ticks)
 
 Supported commands:
-BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASH_ID FLASHBOOT 
+BOOT RESET HELP VERSION UPTIME DEBUG MEMTEST QSPI EMMC MMC SDCARD PAYLOAD SPI SNVM RESUME SERIALBOOT FLASHID FLASHBOOT 
 >> spi
 
 [7.651236] Selecting SPI Flash as boot source ...

@@ -241,7 +241,7 @@ enum CmdId {
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
     CMD_SERIALBOOT,
-    CMD_FLASH_ID,
+    CMD_FLASHID,
     CMD_FLASHBOOT,
 };
 
@@ -334,7 +334,7 @@ static const struct tinycli_cmd toplevelCmds[] = {
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL: SERIALBOOT", tinyCLI_SerialBoot_ },
-    { CMD_FLASH_ID, "FLASH_ID", "Read SPI Flash JEDEC ID: FLASH_ID", tinyCLI_FlashId_ },
+    { CMD_FLASHID, "FLASHID", "Read SPI Flash JEDEC ID: FLASHID", tinyCLI_FlashId_ },
     { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
 #endif
 };
@@ -373,7 +373,7 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, true },
-    { CMD_FLASH_ID, true },
+    { CMD_FLASHID, true },
     { CMD_FLASHBOOT, true },
     
 #endif
