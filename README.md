@@ -1,3 +1,184 @@
+
+# Hart Software Services (HSS) Documentation: Icicle Kit & Discovery Kit
+
+The Microchip Hart Software Services (HSS) serves as the zero-stage bootloader and system controller for PolarFire® SoC FPGAs. It executes on the E51 monitor core to configure clocks, train DDR memory, release application U54 harts, and load boot payloads (U-Boot, Linux, or bare-metal binaries).
+
+This guide outlines the hardware-specific architectural differences, modifications required between the **PolarFire SoC Icicle Kit** and **PolarFire SoC Discovery Kit**, build and flashing procedures, and CLI runtime usage.
+
+---
+
+## 1. Hardware Overview & Configuration Differences
+
+| Feature | PolarFire SoC Icicle Kit | PolarFire SoC Discovery Kit |
+| :--- | :--- | :--- |
+| **Target Device** | MPFS250T-FCVG484EES / MPFS250TS | MPFS095T-1FCSG325E |
+| **HSS Target Identifier** | `mpfs-icicle-kit-es` (or `mpfs-icicle-kit`) | `mpfs-disco-kit` |
+| **DDR Subsystem** | 2 GB LPDDR4 (32-bit data bus) | 1 GB DDR4 (16-bit / 32-bit compact bus) |
+| **Primary Storage** | Onboard eMMC (default) & MicroSD slot | MicroSD card socket only (no onboard eMMC) |
+| **UART Port / Bridge** | Silicon Labs CP2108 Quad USB-to-UART (Interface 0/1) | FTDI / On-board FlashPro5 USB-C (UART Interface 0) |
+| **Hardware Config Source** | `boards/mpfs-icicle-kit-es/fpga_design_config` | `boards/mpfs-disco-kit/fpga_design_config` |
+
+---
+
+## 2. Key HSS Modifications
+
+When adapting or customizing HSS across the two boards, modifications center on three core subsystems:
+
+### A. MSS Component & DDR Memory Timing Configuration
+The HSS generates hardware initialization tables from Libero MSS XML exports placed in `boards/<BOARD>/fpga_design_config`:
+* **Icicle Kit (`mpfs-icicle-kit-es`)**: Configured for LPDDR4 timings, IO bank voltages, and full MPFS250 peripheral mapping.
+* **Discovery Kit (`mpfs-disco-kit`)**: Adjusted for the MPFS095 device package and DDR4 memory profile. Memory training parameters, PLL clock multipliers, and bank registers reflect the smaller pin-count FPGA.
+
+### B. Boot Source & Storage Services (`Kconfig`)
+* **Icicle Kit**: Default configurations enable both MMC/eMMC (`CONFIG_SERVICE_BOOT_MMC=y`) and SD card options. Payload loading prioritizes partition offsets on eMMC flash.
+* **Discovery Kit**: Because onboard eMMC is not populated, MMC peripheral routing must target the MicroSD interface (`mmcblk0` on the physical SD bus), ensuring the boot service does not stall polling non-existent eMMC hardware.
+
+### C. Console UART & CLI Output
+* HSS prints debug logs and the interactive CLI via the Microchip MSS UART peripheral.
+* Ensure the target UART controller instance matches the hardware schematic routing:
+  * Icicle Kit routes MSS UART0 to Interface 0 (or UART1 depending on board revision).
+  * Discovery Kit routes MSS UART0 directly through the single Type-C serial debug interface.
+
+---
+
+## 3. Environment Setup & Toolchain Requirements
+
+Ensure the following tools are installed and present in your system `PATH`:
+* **RISC-V Toolchain:** xPack GNU RISC-V Embedded GCC or Microchip SoftConsole v2022.2+
+* **Microchip Tools:** Libero SoC / FlashPro Express (provides `fpgenprog`)
+* **Python 3:** with Tkinter (`sudo apt install python3-tk`) for Kconfig menu operations
+
+```bash
+# Export toolchain and Libero paths (adjust paths according to your installation)
+export SC_INSTALL_DIR=/opt/microchip/SoftConsole-v2022.2-RISC-V-747
+export FPGENPROG=/opt/microchip/Libero_SoC_v2024.1/Libero/bin64/fpgenprog
+export PATH=$PATH:$SC_INSTALL_DIR/riscv-unknown-elf-gcc/bin:$SC_INSTALL_DIR/python3/bin
+export CROSS_COMPILE=riscv64-unknown-elf-
+```
+
+---
+
+## 4. Build Instructions
+
+### Building for the Icicle Kit
+```bash
+cd hart-software-services
+
+# Clean previous build artifacts
+make clean BOARD=mpfs-icicle-kit-es
+
+# Load Icicle Kit default configuration
+make BOARD=mpfs-icicle-kit-es defconfig
+
+# (Optional) Open interactive menu to modify CLI features, boot timers, or services
+make BOARD=mpfs-icicle-kit-es menuconfig
+
+# Compile HSS binary and eNVM wrapper
+make -j$(nproc) BOARD=mpfs-icicle-kit-es
+```
+
+### Building for the Discovery Kit
+```bash
+cd hart-software-services
+
+# Clean previous build artifacts
+make clean BOARD=mpfs-disco-kit
+
+# Load Discovery Kit default configuration
+make BOARD=mpfs-disco-kit defconfig
+
+# (Optional) Open interactive menu
+make BOARD=mpfs-disco-kit menuconfig
+
+# Compile HSS binary and eNVM wrapper
+make -j$(nproc) BOARD=mpfs-disco-kit
+```
+
+Build outputs will be generated in `build/`, including:
+* `build/hss-envm.elf`: Raw ELF binary.
+* `build/bootmode1/envm_wrapper_bm1.hex`: Formatted hex file packaged with the decompressor for direct programming into eNVM.
+
+---
+
+## 5. Programming HSS into eNVM
+
+Connect your development kit via USB to the host computer.
+
+### Option 1: Direct Command-Line Programming via `fpgenprog`
+Ensure `FPGENPROG` is exported in your environment, then execute:
+
+* **For Icicle Kit:**
+  ```bash
+  make BOARD=mpfs-icicle-kit-es program
+  ```
+
+* **For Discovery Kit:**
+  ```bash
+  make BOARD=mpfs-disco-kit program
+  ```
+
+### Option 2: Using FlashPro Express GUI
+1. Open **FlashPro Express**.
+2. Create a new job file or open your board’s base design job file.
+3. Import the generated `.hex` file:
+   `build/bootmode1/envm_wrapper_bm1.hex` into the eNVM client.
+4. Set the programmer action to **PROGRAM** and click **RUN**.
+
+---
+
+## 6. How to Use & Interact with HSS
+
+### Serial Terminal Connection
+Open a terminal emulator (PuTTY, Minicom, Picocom) with the following parameters:
+* **Baud Rate:** `115200`
+* **Data Bits:** `8`
+* **Parity:** `None`
+* **Stop Bits:** `1`
+* **Flow Control:** `None`
+
+* **Icicle Kit:** Connect to the first or second enumerated USB serial port (e.g., `/dev/ttyUSB0` or `/dev/ttyUSB1`).
+* **Discovery Kit:** Connect to the enumerated primary COM port (e.g., `/dev/ttyUSB0`).
+
+### Accessing the Interactive HSS CLI
+Power-cycle or assert the reset push-button on the board. During boot, HSS displays banner info and counts down:
+
+```text
+Hart Software Services (HSS) - version 0.99.xx
+MPFS HAL version 2.x.xxx / DDR Driver version 0.x.xxx
+Press <SPACE> or <CTRL+C> to enter interactive mode...
+```
+
+Press `<SPACE>` or `<CTRL+C>` before timeout expires to enter the prompt (`>> `).
+
+### Useful HSS CLI Commands
+* `help`: Lists all supported commands.
+* `boot`: Resumes booting the configured payload from storage.
+* `mmc info`: Queries the attached eMMC (Icicle) or SD card (Icicle/Discovery) geometry and status.
+* `mmc read <addr> <sector> <count>`: Reads raw blocks from card into RAM for diagnostic testing.
+* `service`: Shows status of background state machines and active services.
+* `diag`: Runs built-in hardware diagnostics (e.g., DDR memory pattern checks).
+
+---
+
+## 7. Packaging Payload Images (`hss-payload-generator`)
+
+HSS boots secondary binaries (U-Boot, Linux kernel, or bare-metal images) using a formatted payload image generated with `hss-payload-generator`:
+
+1. Create a `config.yaml` matching your binary layout:
+   ```yaml
+   set-name: 'PolarFire-SoC-Payload'
+   hart-entry-points: {u54_1: '0x80000000', u54_2: '0x80000000', u54_3: '0x80000000', u54_4: '0x80000000'}
+   payloads:
+     u-boot.bin: {exec-addr: '0x80000000', owner-hart: u54_1, secondary-hart: [u54_2, u54_3, u54_4], priv-mode: prv-s}
+   ```
+2. Generate the binary payload:
+   ```bash
+   hss-payload-generator -c config.yaml payload.bin
+   ```
+  
+3. Write `payload.bin` to the designated raw partition (typically GUID `21686148-6449-6E6F-744E-656564454649`) on your SD card or eMMC.
+
+
 # HSS with SerialBoot and SPI Flash Boot support
 
 brnach: flashboot4 : add a generic spi flash driver for different board , wip
