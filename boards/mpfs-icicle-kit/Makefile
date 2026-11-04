@@ -97,6 +97,20 @@ EXTRA_SRCS-$(CONFIG_SERVICE_QSPI) += \
 $(BINDIR)/baremetal/drivers/micron_mt25q/micron_mt25q.o: CFLAGS=$(CFLAGS_GCCEXT)
 endif
 
+################################################################################################
+#
+# Extra hardware dependency rules for CoreSPI
+#
+
+ifdef CONFIG_SERVICE_SERIALBOOT
+
+# If you created a board-level binding (e.g. board_spi.c), include it here as well:
+ EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+    $(BOARD_DIR)/board_spi.c
+
+endif
+
+
 
 ################################################################################################
 #

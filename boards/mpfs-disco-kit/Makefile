@@ -93,6 +93,25 @@ EXTRA_SRCS-$(CONFIG_SERVICE_QSPI) += \
 $(BINDIR)/baremetal/drivers/micron_mt25q/micron_mt25q.o: CFLAGS=$(CFLAGS_GCCEXT)
 endif
 
+################################################################################################
+#
+# Extra hardware dependency rules for MSS SPI0 (Discovery Kit Flash)
+#
+
+ifdef CONFIG_SERVICE_SERIALBOOT
+INCLUDES += \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/mpfs_hal/common \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/hal
+
+EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+    baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.c \
+    $(BOARD_DIR)/board_spi.c
+
+$(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/$(BOARD_DIR)/board_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/services/serialboot/serialboot.o: CFLAGS += -DSERIALBOOT_UART_INDEX=1
+endif
 
 ################################################################################################
 #

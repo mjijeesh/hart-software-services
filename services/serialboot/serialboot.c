@@ -9,7 +9,7 @@
 
 #include "sfl.h"
 #include "serialboot.h"
-#include "micron1gflash.h"
+#include "spi_flash.h"
 #include "mss_uart.h"
 #include "ssmb_ipi.h"
 
@@ -21,13 +21,42 @@
 #define SYS_CYCLE_PER_SEC 600000000UL
 #define FLASH_DEFAULT_ADDR 0x00100000UL
 
-/* SFL Extended Protocol Opcodes (from boot.c) */
+/* SFL Extended Protocol Opcodes */
 #ifndef SFL_CMD_FLASH
 #define SFL_CMD_FLASH 0x04
 #endif
 #ifndef SFL_CMD_DONE
 #define SFL_CMD_DONE  0x05
 #endif
+
+/* Low-level UART hooks: Select index 1 for Discovery Kit (MMUART1), 0 for Icicle Kit (MMUART0) */
+#ifndef SERIALBOOT_UART_INDEX
+#if defined(CONFIG_BOARD_MPFS_DISCO_KIT) || defined(CONFIG_BOARD_MPFS_DISCOVERY_KIT)
+#define SERIALBOOT_UART_INDEX 1
+#else
+#define SERIALBOOT_UART_INDEX 0
+#endif
+#endif
+
+extern mss_uart_instance_t * const pUartDeviceList[];
+#define CONSOLE_UART (pUartDeviceList[SERIALBOOT_UART_INDEX])
+
+static inline bool uart_read_nonblock(uint8_t *ch)
+{
+    return (MSS_UART_get_rx(CONSOLE_UART, ch, 1) > 0);
+}
+
+static inline void uart_write_byte(uint8_t ch)
+{
+    MSS_UART_polled_tx(CONSOLE_UART, &ch, 1);
+}
+
+static inline void uart_write_str(const char *str)
+{
+    MSS_UART_polled_tx_string(CONSOLE_UART, (const uint8_t *)str);
+}
+
+
 
 static TxId_t g_serialboot_txid = 1u;
 
@@ -38,20 +67,7 @@ static inline uint64_t get_cycles(void)
     return c;
 }
 
-static inline bool uart_read_nonblock(uint8_t *ch)
-{
-    return (MSS_UART_get_rx(&g_mss_uart0_lo, ch, 1) > 0);
-}
 
-static inline void uart_write_byte(uint8_t ch)
-{
-    MSS_UART_polled_tx(&g_mss_uart0_lo, &ch, 1);
-}
-
-static inline void uart_write_str(const char *str)
-{
-    MSS_UART_polled_tx_string(&g_mss_uart0_lo, (const uint8_t *)str);
-}
 
 static uint16_t sfl_crc16(const unsigned char *buffer, size_t len)
 {
@@ -67,6 +83,20 @@ static uint16_t sfl_crc16(const unsigned char *buffer, size_t len)
         }
     }
     return crc;
+}
+
+static inline bool is_valid_ram_addr(uintptr_t addr)
+{
+    /* LIM Scratchpad (0x08000000 - 0x08200000) */
+    if (addr >= 0x08000000UL && addr < 0x08200000UL) return true;
+
+    /* DDR Cached (0x80000000 - 0xC0000000) */
+    if (addr >= 0x80000000UL && addr < 0xC0000000UL) return true;
+
+    /* DDR Non-Cached (0xC0000000 - 0xE0000000) */
+    if (addr >= 0xC0000000UL && addr < 0xE0000000UL) return true;
+
+    return false;
 }
 
 static int boot_load_max_size(uintptr_t addr, size_t *max_size)
@@ -95,6 +125,14 @@ static uint32_t get_uint32(const unsigned char *data)
             (uint32_t)data[3];
 }
 
+static inline uint32_t get_uint32_le(const unsigned char *data)
+{
+    return ((uint32_t)data[0])       |
+           ((uint32_t)data[1] << 8)  |
+           ((uint32_t)data[2] << 16) |
+           ((uint32_t)data[3] << 24);
+}
+
 static void serialboot_jump(uintptr_t addr)
 {
     mHSS_PRINTF("\n[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x%016lx...\n", addr);
@@ -115,13 +153,36 @@ static void serialboot_jump(uintptr_t addr)
 
     mHSS_PRINTF("[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).\n");
     mHSS_PRINTF("[SERIALBOOT] Returning to HSS TinyCLI.\n\n");
+    
+    
+    /* Enable the below section if we want to disable the hss after the Application code start running */   
+
+    /*  Wait for U54 harts to wake and take control */
+    /* This is a temporary delay to allow the U54 harts to start executing the application code.
+     *  In a real-world scenario, you would want to implement a more robust synchronization mechanism
+     *  to ensure that the U54 harts have successfully started before parking the HSS monitor hart.
+     */
+    //for (volatile int i = 0; i < 200000; i++);
+
+    //mHSS_PRINTF("[SERIALBOOT] All U54 harts launched. Parking HSS Monitor Hart.\n\n");
+
+    /* Disable interrupts on Hart 0 so timer tick messages stop */
+    //__asm__ __volatile__("csrci mstatus, 8");
+
+    /* Park Hart 0 (E51) permanently so it never returns to TinyCLI */
+    //while (1) {
+    //    __asm__ __volatile__("wfi");
+    //}
+
 }
 
 static int check_ack(void)
 {
     int recognized = 0;
     static const char ack_str[SFL_MAGIC_LEN] = SFL_MAGIC_ACK;
-    uint64_t timeout_cycles = SYS_CYCLE_PER_SEC / 4;
+    //uint64_t timeout_cycles = SYS_CYCLE_PER_SEC / 4;
+    /* 2 full seconds timeout for host Python script handshake */
+    uint64_t timeout_cycles = SYS_CYCLE_PER_SEC * 2UL;
     uint64_t start_cycles = get_cycles();
     uint8_t c;
 
@@ -216,9 +277,9 @@ int do_serialboot(void)
                 }
                 spi_flash_start_address = spi_flash_address;
 
-                FLASH_init();
-                FLASH_global_unprotect();
-                FLASH_erase_range(spi_flash_address, total_image_size);
+                spi_flash_init();
+                spi_flash_global_unprotect();
+                spi_flash_erase_range(spi_flash_address, total_image_size);
                 uart_write_byte(SFL_ACK_SUCCESS);
             } else {
                 uart_write_byte(SFL_ACK_ERROR);
@@ -236,8 +297,8 @@ int do_serialboot(void)
             uint32_t load_size = frame.payload_length - 4;
 
             if (is_flash_mode) {
-                /* Stream chunk directly to Micron SPI Flash */
-                FLASH_program(spi_flash_address, &frame.payload[4], load_size);
+                /* Stream chunk directly to SPI Flash */
+                spi_flash_program(spi_flash_address, &frame.payload[4], load_size);
                 spi_flash_address += load_size;
                 total_loaded_size += load_size;
                 uart_write_byte(SFL_ACK_SUCCESS);
@@ -292,54 +353,35 @@ int do_serialboot(void)
 void do_flash_read_id(void)
 {
     uint8_t mfg = 0, dev = 0, cap = 0;
-    FLASH_init();
-    FLASH_read_device_id(&mfg, &dev, &cap);
-    mHSS_PRINTF("\n[SPI_FLASH] JEDEC ID:\n");
-    mHSS_PRINTF(" Manufacturer : 0x%02X (Micron expected: 0x20)\n", mfg);
+
+    spi_flash_init();
+    spi_flash_read_id(&mfg, &dev, &cap);
+
+    const struct spi_flash_info *info = spi_flash_get_info();
+
+    mHSS_PRINTF("\n[SPI_FLASH] JEDEC ID & Device Info:\n");
+    mHSS_PRINTF(" Identified   : %s\n", (info && info->name) ? info->name : "Unknown");
+    mHSS_PRINTF(" Manufacturer : 0x%02X (0x20=Micron, 0xEF=Winbond, 0xBF=SST)\n", mfg);
     mHSS_PRINTF(" Device Type  : 0x%02X\n", dev);
-    mHSS_PRINTF(" Capacity ID  : 0x%02X\n\n", cap);
+    mHSS_PRINTF(" Capacity ID  : 0x%02X\n", cap);
+    mHSS_PRINTF(" 4-Byte Addr  : %s\n\n", (info && info->needs_4byte_addr) ? "Enabled" : "Disabled");
 }
 
 void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size)
 {
     mHSS_PRINTF("\n[FLASH_WRITE] Initializing SPI Flash...\n");
-    FLASH_init();
-    FLASH_global_unprotect();
+    spi_flash_init();
+    spi_flash_global_unprotect();
 
     mHSS_PRINTF("[FLASH_WRITE] Erasing range 0x%08X to 0x%08X (%u bytes)...\n",
                 spi_offset, spi_offset + size, size);
-    FLASH_erase_range(spi_offset, size);
+    spi_flash_erase_range(spi_offset, size);
 
     mHSS_PRINTF("[FLASH_WRITE] Programming from DDR 0x%016lx to Flash 0x%08X...\n",
                 ram_addr, spi_offset);
-    FLASH_program(spi_offset, (uint8_t *)ram_addr, size);
+    spi_flash_program(spi_offset, (const uint8_t *)ram_addr, size);
 
     mHSS_PRINTF("[FLASH_WRITE] Programming complete.\n\n");
-}
-
-/* Add to services/serialboot/serialboot.c */
-
-static inline bool is_valid_ram_addr(uintptr_t addr)
-{
-    /* LIM Scratchpad (0x08000000 - 0x08200000) */
-    if (addr >= 0x08000000UL && addr < 0x08200000UL) return true;
-
-    /* DDR Cached (0x80000000 - 0xC0000000) */
-    if (addr >= 0x80000000UL && addr < 0xC0000000UL) return true;
-
-    /* DDR Non-Cached (0xC0000000 - 0xE0000000) */
-    if (addr >= 0xC0000000UL && addr < 0xE0000000UL) return true;
-
-    return false;
-}
-
-
-static inline uint32_t get_uint32_le(const unsigned char *data)
-{
-    return ((uint32_t)data[0])       |
-           ((uint32_t)data[1] << 8)  |
-           ((uint32_t)data[2] << 16) |
-           ((uint32_t)data[3] << 24);
 }
 
 void do_flashboot(uint32_t spi_offset)
@@ -351,13 +393,13 @@ void do_flashboot(uint32_t spi_offset)
 
     mHSS_PRINTF("\n[FLASHBOOT] Reading FBI header from SPI Flash offset 0x%08X...\n", spi_offset);
 
-    FLASH_init();
-    FLASH_read(spi_offset, header, sizeof(header));
+    spi_flash_init();
+    spi_flash_read(spi_offset, header, sizeof(header));
 
     uint32_t w0_le = get_uint32_le(&header[0]);
     uint32_t w1_le = get_uint32_le(&header[4]);
 
-    /* Case 1: [Length (4B), CRC32 (4B)] -> word 1 is a CRC, not RAM */
+    /* Case 1: [Length (4B), CRC32 (4B)] */
     if (w0_le > 0 && w0_le < 0x04000000UL && !is_valid_ram_addr((uintptr_t)w1_le)) {
         dest_addr   = 0x80000000UL;
         image_size  = w0_le;
@@ -391,7 +433,7 @@ void do_flashboot(uint32_t spi_offset)
 
     mHSS_PRINTF("[FLASHBOOT] Copying %u bytes from SPI 0x%08X to DDR 0x%016lx...\n",
                 image_size, read_offset, dest_addr);
-    FLASH_read(read_offset, (uint8_t *)dest_addr, image_size);
+    spi_flash_read(read_offset, (uint8_t *)dest_addr, image_size);
 
     /* Verify first 4 instruction words */
     uint32_t *p_code = (uint32_t *)dest_addr;

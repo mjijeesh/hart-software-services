@@ -3,7 +3,7 @@
 #
 
 # First, we can optionally set a name for our image, otherwise one will be created dynamically
-set-name: 'PolarFire-SoC-HSS::pfsoc_bios'
+set-name: 'PolarFire-SoC-HSS::baremetal'
 
 #
 # Next, we'll define the entry point addresses for each hart, as follows:
@@ -48,4 +48,4 @@ payloads:
     secondary-hart: u54_4
     priv-mode: prv_m
     skip-opensbi: true
-    payload-name: "pfsoc_bios"
+    payload-name: "baremetal"

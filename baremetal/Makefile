@@ -96,6 +96,27 @@ INCLUDES += \
 	-Ibaremetal/drivers/fpga_ip/miv_ihc_v2
 endif
 
+
+
+################################################################################################
+#
+# Extra hardware dependency rules for CoreSPI
+#
+
+ifdef CONFIG_SERVICE_SERIALBOOT
+INCLUDES += \
+    -Ibaremetal/drivers/fpga_ip/CoreSPI \
+
+EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+    baremetal/drivers/fpga_ip/CoreSPI/core_spi.c \
+	baremetal/drivers/fpga_ip/CoreSPI/hw_reg_access.c
+
+
+$(BINDIR)/baremetal/drivers/fpga_ip/CoreSPI/core_spi.o: CFLAGS=$(CFLAGS_GCCEXT)
+endif
+
+
+
 $(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_mmc/mss_mmc.o: CFLAGS=$(CFLAGS_GCCEXT)
 $(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_qspi/mss_qspi.o: CFLAGS=$(CFLAGS_GCCEXT)
 $(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_mmuart/mss_uart.o: CFLAGS=$(CFLAGS_GCCEXT)
