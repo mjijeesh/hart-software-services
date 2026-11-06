@@ -1,4 +1,67 @@
 
+
+# Netboot Support
+
+Added support for tftp netboot in discovery kit.
+
+file transfer via tftp is happening. booting is not happening need to check.
+
+```
+
+(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/hart-software-services$ python3 mpfs-terminal.py  /dev/ttyUSB1
+[MPFS-TERM] Opened /dev/ttyUSB1 at 115200 baud. (Press Ctrl+C to exit)
+[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
+
+mPress a key to enter CLI, ESC to skip
+Timeout in 1 second
+..
+[4.439481] CLI boot interrupt timeout
+[4.444446] loop 332213 took 606531361 ticks (max 606531361 ticks)
+[4.452371] Initializing Boot Image ...
+[4.457431] Trying to get boot image via MMC ...
+[4.463351] Attempting to select SDCARD ... Failed
+>> netboot
+
+[CLI] Initiating Netboot service...
+
+================ [NETBOOT: HARDWARE INIT] ================
+[NETBOOT] [1/5] Enabling GEM0 peripheral clock and clearing soft reset...
+[NETBOOT] [2/5] Configuring GEM0 MAC Core...
+[NETBOOT]       Station MAC Address : 00:FC:00:12:34:58
+[NETBOOT] [3/5] Probing VSC8221 Hardware Registers...
+[NETBOOT]       PHY ID 1 (Reg 0x02) : 0x000F
+[NETBOOT]       PHY ID 2 (Reg 0x03) : 0xC551
+[NETBOOT] [4/5] Priming DMA Descriptor Queues in Polled Mode...
+[NETBOOT] [5/5] Waiting for Copper Auto-Negotiation...
+[NETBOOT]       Link State          : UP
+[NETBOOT]       Negotiated Speed    : 1000 Mbps (Gigabit)
+[NETBOOT]       Duplex Mode         : Full Duplex
+==========================================================
+
+================ [NETBOOT: DHCP NEGOTIATION] ================
+[DHCP] Broadcasting DHCP Discover (XID: 0x3903F326)...
+[DHCP] Listening for DHCP Offer from router (up to 4 seconds)...
+[DHCP] DHCP Offer Successfully Received!
+[DHCP]   |- Assigned Board IP : 192.168.20.42
+[DHCP]   \- Gateway/Server IP : 192.168.20.1
+=============================================================
+
+[NETBOOT] Target TFTP Server : 192.168.20.94 (Ubuntu Host)
+[NETBOOT] Sending ARP Request for TFTP Server (192.168.20.94)...
+[NETBOOT] Server MAC Resolved: 24:41:8C:F1:9B:45
+[NETBOOT] Requesting file 'mpfs-baremetal.bin' via TFTP...
+
+[NETBOOT] Transfer complete! Total: 34928 bytes
+[NETBOOT] Quiescing GEM0 MAC...
+[NETBOOT] MAC released.
+[CLI] Transfer complete (34928 bytes). Dispatching harts to 0x0000000080000000...
+
+
+
+```
+
+
+
 # Hart Software Services (HSS) Documentation: Icicle Kit & Discovery Kit
 
 The Microchip Hart Software Services (HSS) serves as the zero-stage bootloader and system controller for PolarFire® SoC FPGAs. It executes on the E51 monitor core to configure clocks, train DDR memory, release application U54 harts, and load boot payloads (U-Boot, Linux, or bare-metal binaries).
