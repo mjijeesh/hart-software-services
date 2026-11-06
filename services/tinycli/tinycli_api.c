@@ -48,6 +48,11 @@
 #include "mpfs_reg_map.h"
 #include "opensbi_service.h"
 
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+    static void tinyCLI_NetBoot_(void);
+#endif
+
+
 #if IS_ENABLED(CONFIG_SERVICE_USBDMSC) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
 #    include "usbdmsc_service.h"
 #endif
@@ -115,6 +120,9 @@ struct tinycli_toplevel_cmd_safe {
     static void tinyCLI_FlashId_(void);
     static void tinyCLI_FlashBoot_(void);
 #endif
+
+
+
 
 
 
@@ -243,6 +251,7 @@ enum CmdId {
     CMD_SERIALBOOT,
     CMD_FLASHID,
     CMD_FLASHBOOT,
+    CMD_NETBOOT,
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -337,6 +346,9 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_FLASHID, "FLASHID", "Read SPI Flash JEDEC ID: FLASHID", tinyCLI_FlashId_ },
     { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
 #endif
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+    { CMD_NETBOOT, "NETBOOT", "Download and run payload via TFTP: NETBOOT [server_ip] [filename] [load_addr]", tinyCLI_NetBoot_ },
+#endif
 };
 
 static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
@@ -377,6 +389,11 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
     { CMD_FLASHBOOT, true },
     
 #endif
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+    { CMD_NETBOOT, true },
+#endif
+
 
 };
 
@@ -1197,3 +1214,69 @@ static void tinyCLI_Resume_(void)
        (volatile uint32_t *)((uintptr_t)CLINT_BASE_ADDR + 4u * hartid);
     *msip = 1u;
 }
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+
+#include "netboot_service.h"
+
+extern void serialboot_jump(uintptr_t addr);
+
+/* Standalone, freestanding IPv4 string parser */
+static bool parse_ipv4_str(const char *str, uint32_t *ip_out)
+{
+    uint32_t octets[4] = {0};
+    int octet_idx = 0;
+
+    while (*str && octet_idx < 4) {
+        if (*str >= '0' && *str <= '9') {
+            octets[octet_idx] = octets[octet_idx] * 10 + (*str - '0');
+            if (octets[octet_idx] > 255) return false;
+        } else if (*str == '.') {
+            octet_idx++;
+        } else if (*str == ' ' || *str == '\0') {
+            break;
+        } else {
+            return false;
+        }
+        str++;
+    }
+
+    if (octet_idx != 3) return false;
+
+    *ip_out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+    return true;
+}
+
+static void tinyCLI_NetBoot_(void)
+{
+    uint32_t server_ip = 0xC0A80164UL; /* Default: 192.168.1.100 */
+    const char *file   = "multi_app.bin";
+    uintptr_t ddr_addr = 0x80000000UL;
+    size_t loaded_len  = 0;
+
+    if (argc_tokenCount >= 2) {
+        if (!parse_ipv4_str(argv_tokenArray[1], &server_ip)) {
+            mHSS_PRINTF("Usage: netboot [server_ip] [filename] [load_addr]\n");
+            return;
+        }
+    }
+    if (argc_tokenCount >= 3) {
+        file = argv_tokenArray[2];
+    }
+    if (argc_tokenCount >= 4) {
+        ddr_addr = (uintptr_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[3]);
+    }
+
+    mHSS_PRINTF("[CLI] Initiating Netboot service...\n");
+    netboot_status_t status = NETBOOT_Service_FetchImage(server_ip, file, ddr_addr, &loaded_len);
+
+    if (status != NETBOOT_STATUS_OK) {
+        mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
+        return;
+    }
+
+    mHSS_PRINTF("[CLI] Transfer complete (%u bytes). Dispatching harts to 0x%016lx...\n",
+                (unsigned int)loaded_len, ddr_addr);
+    serialboot_jump(ddr_addr);
+}
+#endif

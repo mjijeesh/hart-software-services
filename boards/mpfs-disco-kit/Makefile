@@ -113,6 +113,29 @@ $(BINDIR)/$(BOARD_DIR)/board_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
 $(BINDIR)/services/serialboot/serialboot.o: CFLAGS += -DSERIALBOOT_UART_INDEX=1
 endif
 
+ifdef CONFIG_SERVICE_NETBOOT
+
+MSS_ETH_DIR := baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_ethernet_mac
+
+INCLUDES += -Iservices/netboot \
+            -Ibaremetal/polarfire-soc-bare-metal-library/src/platform \
+            -I$(MSS_ETH_DIR)
+
+SRCS-$(CONFIG_SERVICE_NETBOOT) += \
+    services/netboot/netboot_service.c \
+    $(MSS_ETH_DIR)/mss_ethernet_mac.c \
+    $(MSS_ETH_DIR)/vsc8221_phy.c \
+    $(MSS_ETH_DIR)/null_phy.c
+
+# Target hardware and 64-bit architecture definitions
+CFLAGS += -DTARGET_G5_SOC=1 \
+          -DMSS_MAC_64_BIT_ADDRESS_MODE=1 \
+          -DMSS_MAC_SIMPLE_TX_QUEUE=1
+
+# Compile baremetal driver source files with GCC extensions and suppressed warnings
+$(BINDIR)/$(MSS_ETH_DIR)/%.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+
+endif
 ################################################################################################
 #
 # Linker Scripts

@@ -1,0 +1,20 @@
+menuconfig SERVICE_NETBOOT
+    bool "Ethernet Network Boot (TFTP) Service"
+    default n
+    select DRIVER_MSS_ETHERNET
+    help
+      Enables the isolated Netboot service in HSS.
+      Provides an on-demand TFTP bootloader over the MSS Gigabit Ethernet MAC.
+      Drivers and buffers remain idle until explicitly triggered.
+
+if SERVICE_NETBOOT
+
+config SERVICE_NETBOOT_DEFAULT_SERVER_IP
+    hex "Default TFTP Server IPv4 (Hex 0x0A000001 = 10.0.0.1)"
+    default 0xC0A80164
+
+config SERVICE_NETBOOT_DEFAULT_BOARD_IP
+    hex "Default Board IPv4 (Hex 0xC0A80132 = 192.168.1.50)"
+    default 0xC0A80132
+
+endif
