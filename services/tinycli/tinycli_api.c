@@ -1249,8 +1249,8 @@ static bool parse_ipv4_str(const char *str, uint32_t *ip_out)
 
 static void tinyCLI_NetBoot_(void)
 {
-    uint32_t server_ip = 0xC0A80164UL; /* Default: 192.168.1.100 */
-    const char *file   = "multi_app.bin";
+    uint32_t server_ip = 0xC0A8145EUL; /* Default: 192.168.20.94 */
+    const char *file   = "mpfs-baremetal.bin";
     uintptr_t ddr_addr = 0x80000000UL;
     size_t loaded_len  = 0;
 
