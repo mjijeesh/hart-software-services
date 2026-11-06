@@ -169,6 +169,9 @@ static bool netboot_hw_init(void)
     MAC0_DEV->mac_q_int[2] = 0;
     MAC0_DEV->mac_q_int[3] = 0;
 
+    /* Enable Promiscuous Mode (Copy All Frames) so no broadcast/DHCP offers are dropped */
+    MAC0_DEV->mac_base->NETWORK_CONFIG |= GEM_COPY_ALL_FRAMES;
+
     /* Allocate TX FIFO segment to Queue 0 */
     MAC0_DEV->mac_base->NETWORK_CONTROL &= ~GEM_ENABLE_TRANSMIT;
     MAC0_DEV->mac_base->TX_Q_SEG_ALLOC_Q0TO3 = 2;
@@ -185,16 +188,20 @@ static bool netboot_hw_init(void)
     mHSS_PRINTF("[NETBOOT] [4/5] Priming DMA Descriptor Queues in Polled Mode...\n");
     MSS_MAC_set_rx_callback(MAC0_DEV, 0, mac_rx_callback);
     for (uint32_t i = 0; i < MSS_MAC_RX_RING_SIZE; ++i) {
-        MSS_MAC_receive_pkt(MAC0_DEV, 0, s_rx_buffer[i], NULL, MSS_MAC_INT_DISABLE);
+        if (i != (MSS_MAC_RX_RING_SIZE - 1)) {
+            MSS_MAC_receive_pkt(MAC0_DEV, 0, s_rx_buffer[i], NULL, MSS_MAC_INT_DISABLE);
+        } else {
+            /* Passing -1 (MSS_MAC_INT_ARM) loads RECEIVE_Q_PTR and enables reception */
+            MSS_MAC_receive_pkt(MAC0_DEV, 0, s_rx_buffer[i], NULL, MSS_MAC_INT_ARM);
+        }
     }
-    MAC0_DEV->mac_base->NETWORK_CONTROL |= GEM_ENABLE_RECEIVE;
 
     /* Step 5: Wait for Link Auto-Negotiation */
     mHSS_PRINTF("[NETBOOT] [5/5] Waiting for Copper Auto-Negotiation...");
 
     mss_mac_speed_t speed = MSS_MAC_1000MBPS;
     uint8_t duplex = 1;
-    uint32_t retries = 50; /* 50 * ~100ms = ~5 seconds */
+    uint32_t retries = 50; /* 50 * 100ms = 5.0 seconds */
     bool link_ok = false;
 
     while (retries--) {
@@ -202,9 +209,7 @@ static bool netboot_hw_init(void)
             link_ok = true;
             break;
         }
-        for (volatile uint32_t d = 0; d < 3000000U; ++d) {
-            __asm__ __volatile__("nop");
-        }
+        MSS_MAC_delay(MAC0_DEV, 100000); /* 100ms delay */
         mHSS_PRINTF(".");
     }
     mHSS_PRINTF("\n");
@@ -265,40 +270,50 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
     frame[16] = (uint8_t)(ip_len >> 8); frame[17] = (uint8_t)(ip_len & 0xFF);
     frame[18] = 0x00; frame[19] = 0x01;
     frame[20] = 0x00; frame[21] = 0x00;
-    frame[22] = 128;  frame[23] = 17;
-    memset(&frame[26], 0x00, 4);
-    memset(&frame[30], 0xFF, 4);
+    frame[22] = 128;  frame[23] = 17;   /* UDP */
+    memset(&frame[26], 0x00, 4);        /* 0.0.0.0 */
+    memset(&frame[30], 0xFF, 4);        /* 255.255.255.255 */
 
     uint16_t ip_cksum = checksum(&frame[14], 20);
     frame[24] = (uint8_t)(ip_cksum >> 8);
     frame[25] = (uint8_t)(ip_cksum & 0xFF);
 
-    frame[34] = 0x00; frame[35] = 68;
-    frame[36] = 0x00; frame[37] = 67;
+    frame[34] = 0x00; frame[35] = 68;   /* Client Port 68 */
+    frame[36] = 0x00; frame[37] = 67;   /* Server Port 67 */
     frame[38] = (uint8_t)(udp_len >> 8); frame[39] = (uint8_t)(udp_len & 0xFF);
 
     uint8_t *dhcp = &frame[42];
-    dhcp[0] = 0x01; dhcp[1] = 0x01; dhcp[2] = 0x06; dhcp[3] = 0x00;
+    dhcp[0] = 0x01; /* BOOTREQUEST */
+    dhcp[1] = 0x01; /* Ethernet */
+    dhcp[2] = 0x06; /* Hw Addr Len */
+    dhcp[3] = 0x00;
     dhcp[4] = (uint8_t)((xid >> 24) & 0xFF);
     dhcp[5] = (uint8_t)((xid >> 16) & 0xFF);
     dhcp[6] = (uint8_t)((xid >> 8) & 0xFF);
     dhcp[7] = (uint8_t)(xid & 0xFF);
-    dhcp[10] = 0x80;
+    dhcp[10] = 0x80; /* Broadcast flag */
     memcpy(&dhcp[28], s_mac_addr, 6);
 
+    /* Magic Cookie */
     dhcp[236] = 0x63; dhcp[237] = 0x82; dhcp[238] = 0x53; dhcp[239] = 0x63;
-    dhcp[240] = 53; dhcp[241] = 1; dhcp[242] = 1;
+    dhcp[240] = 53; dhcp[241] = 1; dhcp[242] = 1; /* DHCP Discover */
     dhcp[243] = 55; dhcp[244] = 3; dhcp[245] = 1; dhcp[246] = 3; dhcp[247] = 6;
     dhcp[248] = 12; dhcp[249] = 5; memcpy(&dhcp[250], "Polar", 5);
-    dhcp[255] = 255;
+    dhcp[255] = 255; /* End Option */
 
     mHSS_PRINTF("[DHCP] Broadcasting DHCP Discover (XID: 0x%08X)...\n", (unsigned int)xid);
     MSS_MAC_send_pkt(MAC0_DEV, 0, frame, total_len, NULL);
 
-    mHSS_PRINTF("[DHCP] Listening for DHCP Offer from router...\n");
+    /* Flush TX queue */
+    for (uint32_t t = 0; t < 500 && MAC0_DEV->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
+        PLIC_mac0_int_IRQHandler();
+        MSS_MAC_delay(MAC0_DEV, 20);
+    }
 
-    uint64_t start = HSS_GetTime();
-    while ((HSS_GetTime() - start) < 3000000UL) {
+    mHSS_PRINTF("[DHCP] Listening for DHCP Offer from router (up to 4 seconds)...\n");
+
+    /* 4000ms timeout with 1ms polling intervals */
+    for (uint32_t ms = 0; ms < 4000; ++ms) {
         PLIC_mac0_int_IRQHandler();
 
         if (s_rx_packet_ready) {
@@ -347,13 +362,15 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
                         if (discovered_server_ip && srv_ip != 0) {
                             *discovered_server_ip = srv_ip;
                         }
-                        MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_DISABLE);
+                        MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
                         return true;
                     }
                 }
             }
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_DISABLE);
+            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
         }
+
+        MSS_MAC_delay(MAC0_DEV, 1000); /* 1ms per poll */
     }
 
     mHSS_PRINTF("[DHCP] WARNING: Timeout waiting for lease. Using fallback IP: %u.%u.%u.%u\n",
@@ -368,14 +385,17 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
 
 static bool resolve_arp(uint32_t target_ip)
 {
-    uint8_t arp_pkt[42];
-    memset(arp_pkt, 0xFF, 6);
+    /* 60-byte frame prevents network switches from dropping as runt frames */
+    uint8_t arp_pkt[60];
+    memset(arp_pkt, 0, sizeof(arp_pkt));
+
+    memset(&arp_pkt[0], 0xFF, 6);
     memcpy(&arp_pkt[6], s_mac_addr, 6);
     arp_pkt[12] = 0x08; arp_pkt[13] = 0x06;
     arp_pkt[14] = 0x00; arp_pkt[15] = 0x01;
     arp_pkt[16] = 0x08; arp_pkt[17] = 0x00;
     arp_pkt[18] = 0x06; arp_pkt[19] = 0x04;
-    arp_pkt[20] = 0x00; arp_pkt[21] = 0x01;
+    arp_pkt[20] = 0x00; arp_pkt[21] = 0x01; /* ARP Request */
 
     memcpy(&arp_pkt[22], s_mac_addr, 6);
     memcpy(&arp_pkt[28], s_board_ip, 4);
@@ -389,8 +409,14 @@ static bool resolve_arp(uint32_t target_ip)
 
     MSS_MAC_send_pkt(MAC0_DEV, 0, arp_pkt, sizeof(arp_pkt), NULL);
 
-    uint64_t start = HSS_GetTime();
-    while ((HSS_GetTime() - start) < 2000000UL) {
+    /* Flush TX queue */
+    for (uint32_t t = 0; t < 500 && MAC0_DEV->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
+        PLIC_mac0_int_IRQHandler();
+        MSS_MAC_delay(MAC0_DEV, 20);
+    }
+
+    /* 2500ms timeout with 1ms polling intervals */
+    for (uint32_t ms = 0; ms < 2500; ++ms) {
         PLIC_mac0_int_IRQHandler();
 
         if (s_rx_packet_ready) {
@@ -398,17 +424,19 @@ static bool resolve_arp(uint32_t target_ip)
             uint8_t *rx = s_active_rx_ptr;
 
             if (s_rx_packet_length >= 42 && rx[12] == 0x08 && rx[13] == 0x06) {
-                if (rx[21] == 0x02) {
+                if (rx[21] == 0x02) { /* ARP Reply */
                     memcpy(s_server_mac, &rx[6], 6);
                     mHSS_PRINTF("[NETBOOT] Server MAC Resolved: %02X:%02X:%02X:%02X:%02X:%02X\n",
                                 s_server_mac[0], s_server_mac[1], s_server_mac[2],
                                 s_server_mac[3], s_server_mac[4], s_server_mac[5]);
-                    MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_DISABLE);
+                    MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
                     return true;
                 }
             }
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_DISABLE);
+            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
         }
+
+        MSS_MAC_delay(MAC0_DEV, 1000);
     }
     return false;
 }
@@ -452,7 +480,7 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
     uint16_t src_port = 50000;
     uint16_t dst_port = TFTP_PORT;
     uint8_t *tftp_req = tx + 42;
-    *tftp_req++ = 0x00; *tftp_req++ = 0x01;
+    *tftp_req++ = 0x00; *tftp_req++ = 0x01; /* RRQ */
     strcpy((char *)tftp_req, filename);
     tftp_req += strlen(filename) + 1;
     strcpy((char *)tftp_req, "octet");
@@ -532,7 +560,9 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
                 }
             }
 
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_DISABLE);
+            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
         }
+
+        MSS_MAC_delay(MAC0_DEV, 50);
     }
 }
