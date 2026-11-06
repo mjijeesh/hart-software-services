@@ -451,12 +451,16 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
         return NETBOOT_STATUS_LINK_DOWN;
     }
 
+    /* Acquire board IP dynamically via DHCP */
     uint32_t dhcp_server_ip = 0;
     acquire_dhcp_lease(&dhcp_server_ip);
 
-    if (server_ip == 0xC0A80164UL && dhcp_server_ip != 0) {
-        server_ip = dhcp_server_ip;
-    }
+    /* Direct TFTP traffic to your Ubuntu PC (192.168.20.94) */
+    server_ip = 0xC0A8145EUL;
+
+    mHSS_PRINTF("[NETBOOT] Target TFTP Server : %u.%u.%u.%u (Ubuntu Host)\n",
+                (server_ip >> 24) & 0xFF, (server_ip >> 16) & 0xFF,
+                (server_ip >> 8) & 0xFF, server_ip & 0xFF);
 
     if (!resolve_arp(server_ip)) {
         mHSS_PRINTF("[NETBOOT] ERROR: TFTP server MAC resolution timed out.\n");
