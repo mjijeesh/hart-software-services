@@ -36,7 +36,8 @@ typedef int PLIC_IRQn_Type;
 #define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
 #endif
 
-extern uint8_t PLIC_mac0_int_IRQHandler(void);
+
+
 
 #include "netboot_board.h"
 
@@ -45,23 +46,35 @@ static const netboot_hw_config_t *s_hw_cfg = NULL;
 
 #define TFTP_PORT 69
 
+extern uint8_t PLIC_mac0_int_IRQHandler(void);
+extern uint8_t PLIC_mac1_int_IRQHandler(void);
+
+static inline void poll_active_mac_isr(void)
+{
+    if (ACTIVE_MAC == &g_mac1) {
+        PLIC_mac1_int_IRQHandler();
+    } else {
+        PLIC_mac0_int_IRQHandler();
+    }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Freestanding Linker Stubs & Helpers                                        */
 /* -------------------------------------------------------------------------- */
 
 uint32_t __bswapsi2(uint32_t u);
 
-psr_t HAL_disable_interrupts(void)
+__attribute__((weak)) psr_t HAL_disable_interrupts(void)
 {
     return 0U;
 }
 
-void HAL_restore_interrupts(psr_t saved_psr)
+__attribute__((weak)) void HAL_restore_interrupts(psr_t saved_psr)
 {
     (void)saved_psr;
 }
 
-char *strcpy(char *dest, const char *src)
+__attribute__((weak)) char *strcpy(char *dest, const char *src)
 {
     char *d = dest;
     while ((*d++ = *src++) != '\0') {
@@ -69,7 +82,7 @@ char *strcpy(char *dest, const char *src)
     return dest;
 }
 
-uint32_t __bswapsi2(uint32_t u)
+__attribute__((weak)) uint32_t __bswapsi2(uint32_t u)
 {
     return (((u & 0x000000FFUL) << 24) |
             ((u & 0x0000FF00UL) << 8)  |
@@ -386,12 +399,13 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
         MSS_MAC_send_pkt(ACTIVE_MAC, 0, frame, total_len, NULL);
 
         for (uint32_t t = 0; t < 200 && ACTIVE_MAC->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
-            PLIC_mac0_int_IRQHandler();
+            //PLIC_mac0_int_IRQHandler();
+            poll_active_mac_isr();
             MSS_MAC_delay(ACTIVE_MAC, 20);
         }
 
         for (uint32_t ms = 0; ms < 1200; ++ms) {
-            PLIC_mac0_int_IRQHandler();
+            poll_active_mac_isr();
 
             if (s_rx_packet_ready) {
                 uint8_t *rx = s_rx_stage;
@@ -507,12 +521,13 @@ static bool resolve_arp(uint32_t target_ip)
         MSS_MAC_send_pkt(ACTIVE_MAC, 0, arp_pkt, sizeof(arp_pkt), NULL);
 
         for (uint32_t t = 0; t < 200 && ACTIVE_MAC->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
-            PLIC_mac0_int_IRQHandler();
+            //PLIC_mac0_int_IRQHandler();
+            poll_active_mac_isr();
             MSS_MAC_delay(ACTIVE_MAC, 20);
         }
 
         for (uint32_t ms = 0; ms < 750; ++ms) {
-            PLIC_mac0_int_IRQHandler();
+            poll_active_mac_isr();
 
             if (s_rx_packet_ready) {
                 uint8_t *rx = s_rx_stage;
@@ -660,7 +675,8 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
     uint32_t poll_count = 0;
 
     while (1) {
-        PLIC_mac0_int_IRQHandler();
+        //PLIC_mac0_int_IRQHandler();
+        poll_active_mac_isr();
 
         if (s_rx_packet_ready) {
             uint8_t *rx = s_rx_stage;
