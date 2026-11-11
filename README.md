@@ -1,34 +1,85 @@
 
+# HSS Netboot Service 
 
-# Netboot Support
+## 1. Overview
+The HSS Netboot Service is a robust, bare-metal TFTP/DHCP bootloader implementation for the PolarFire SoC Hart Software Services (HSS). It allows developers to dynamically download and execute binary payloads (`boot.bin`) directly into DDR memory over an Ethernet network, bypassing the need for eMMC, SD Card, or QSPI flash programming during iterative development.
 
-Added support for tftp netboot in discovery kit.
+### Core Features
+* **Dynamic DHCP Discovery:** Automatically extracts the TFTP Server IP from BOOTP Next-Server (`siaddr`) or DHCP Option 66, falling back to a static Kconfig default if no server is advertised.
+* **Network Switch Compatibility:** Includes a 3.0-second delay after link auto-negotiation to accommodate Spanning Tree Protocol (STP) listening/learning states on managed switches.
+* **Active Retransmission:** Mitigates UDP packet loss by using active retransmission loops for DHCP Discovery, ARP Resolution, and TFTP Read Requests.
+* **Cross-Subnet Routing:** Automatically resolves the default Gateway MAC address if the target TFTP server resides on a different subnet.
+* **Fallback Static IP:** Seamlessly transitions to a static board IP if the DHCP server times out or is absent (direct peer-to-peer cable connection).
 
-file transfer via tftp is happening. booting is not happening need to check.
+---
 
-```
+## 2. Hardware Profiles
 
-(litex-env) jijeesh@jijeesh-Latitude-5300:~/git/hart-software-services$ python3 mpfs-terminal.py  /dev/ttyUSB1
-[MPFS-TERM] Opened /dev/ttyUSB1 at 115200 baud. (Press Ctrl+C to exit)
-[MPFS-TERM] Type 'serialboot' on prompt to trigger download.
+The Netboot service abstracts hardware differences between PolarFire SoC development kits using a board configuration struct (`netboot_hw_config_t`).
 
-mPress a key to enter CLI, ESC to skip
-Timeout in 1 second
-..
-[4.439481] CLI boot interrupt timeout
-[4.444446] loop 332213 took 606531361 ticks (max 606531361 ticks)
-[4.452371] Initializing Boot Image ...
-[4.457431] Trying to get boot image via MMC ...
-[4.463351] Attempting to select SDCARD ... Failed
+### MPFS Discovery Kit
+* **Ethernet Port:** J1
+* **MAC Controller:** GEM0 (`g_mac0`)
+* **PHY Chip:** VSC8221 (Single Port Gigabit)
+* **PHY Address:** `11U`
+* **Management Bus:** Direct to GEM0
+
+### MPFS Icicle Kit
+The Icicle Kit utilizes a dual-port VSC8662 PHY. The MDIO management bus for **both** ports is physically routed to GEM1.
+* **Port J2 (Primary):** Data via GEM1 (`g_mac1`), MDIO via GEM1 (`g_mac1`). PHY Address `9U`.
+* **Port J1 (Secondary):** Data via GEM0 (`g_mac0`), MDIO routed across to GEM1 (`g_mac1`). PHY Address `8U`.
+  * *Note: Port J1 utilizes **Cross-MAC MDIO** routing. GEM0 handles the SGMII data path and DMA, while GEM1 acts as the `phy_controller` to execute MDIO register reads/writes.*
+
+---
+
+## 3. File Modification Manifest
+
+The implementation required modifying the core HSS services, board initialization files, and the Microchip MSS Bare-Metal driver configuration.
+
+### Core Services
+* `services/netboot/netboot_service.c`
+  * Implemented the standalone Netboot engine (Hardware Init, DHCP, ARP, TFTP).
+  * Added weak attributes (`__attribute__((weak))`) to freestanding linker stubs (`HAL_disable_interrupts`, `strcpy`, etc.) to prevent duplicate symbol conflicts on boards that compile `hal_irq.o` (like the Icicle Kit).
+  * Added dynamic ISR polling to support both `PLIC_mac0_int_IRQHandler` and `PLIC_mac1_int_IRQHandler`.
+* `services/netboot/netboot_service.h`
+  * Exposed `NETBOOT_Service_FetchImage()` and the U54 Hart dispatcher `netboot_jump()`.
+* `services/netboot/netboot_board.h`
+  * Defined `netboot_hw_config_t` to abstract MAC, PHY, clock masks, and cross-MAC MDIO controllers (`phy_controller`).
+* `services/tinycli/tinycli_api.c`
+  * Registered the `netboot` command and wired it to `NETBOOT_Service_FetchImage(0, ...)`.
+
+### Board Profiles
+* `boards/mpfs-disco-kit/board_eth.c`
+  * Configured `s_disco_net_cfg` for GEM0 and VSC8221 PHY.
+* `boards/mpfs-icicle-kit/board_eth.c`
+  * Configured `s_icicle_net_cfg` for VSC8662. Included a `#define ICICLE_USE_PORT_J1` toggle to easily switch between Port J2 (Direct GEM1) and Port J1 (GEM0 Data + GEM1 MDIO).
+
+### Build System & Driver Configuration (Crucial Linker Fix)
+To prevent linker conflicts caused by compiling multiple unreferenced PHY drivers, the monolithic `mss_ethernet_mac_sw_cfg.h` was shadowed at the board level.
+* `boards/mpfs-disco-kit/mss_ethernet_mac_sw_cfg.h`
+  * Enables **only** `MSS_MAC_USE_PHY_VSC8221`. Sets HW ID to `MSS_MAC_DESIGN_DISCOVERY_GEM0`.
+* `boards/mpfs-icicle-kit/mss_ethernet_mac_sw_cfg.h`
+  * Enables **only** `MSS_MAC_USE_PHY_VSC8662`. Sets HW ID to `MSS_MAC_DESIGN_ICICLE_STD_GEM0`.
+* `boards/<board>/Makefile`
+  * Added `-include $(BOARD_DIR)/mss_ethernet_mac_sw_cfg.h` to `CFLAGS` to force the compiler to use the board-specific hardware definitions, bypassing the generic vendor file.
+
+---
+
+## 4. Expected Results
+
+To initiate a network boot, interrupt the boot sequence to enter the TinyCLI, then type `netboot`.
+
+### Expected Output: MPFS Discovery Kit (VSC8221)
+```text
 >> netboot
 
 [CLI] Initiating Netboot service...
 
 ================ [NETBOOT: HARDWARE INIT] ================
-[NETBOOT] [1/5] Enabling GEM0 peripheral clock and clearing soft reset...
-[NETBOOT] [2/5] Configuring GEM0 MAC Core...
+[NETBOOT] [1/5] Cycling GEM peripheral reset and clock...
+[NETBOOT] [2/5] Configuring GEM MAC Core...
 [NETBOOT]       Station MAC Address : 00:FC:00:12:34:58
-[NETBOOT] [3/5] Probing VSC8221 Hardware Registers...
+[NETBOOT] [3/5] Probing Hardware Registers (PHY Addr: 11)...
 [NETBOOT]       PHY ID 1 (Reg 0x02) : 0x000F
 [NETBOOT]       PHY ID 2 (Reg 0x03) : 0xC551
 [NETBOOT] [4/5] Priming DMA Descriptor Queues in Polled Mode...
@@ -36,29 +87,71 @@ Timeout in 1 second
 [NETBOOT]       Link State          : UP
 [NETBOOT]       Negotiated Speed    : 1000 Mbps (Gigabit)
 [NETBOOT]       Duplex Mode         : Full Duplex
-==========================================================
-
+[NETBOOT] Allowing switch port to enter forwarding state (3.0s)...
 ================ [NETBOOT: DHCP NEGOTIATION] ================
-[DHCP] Broadcasting DHCP Discover (XID: 0x3903F326)...
-[DHCP] Listening for DHCP Offer from router (up to 4 seconds)...
+[DHCP] Broadcasting DHCP Discover (Attempt 1/6)...
 [DHCP] DHCP Offer Successfully Received!
-[DHCP]   |- Assigned Board IP : 192.168.20.42
-[DHCP]   \- Gateway/Server IP : 192.168.20.1
+[DHCP]   |- Assigned Board IP : 192.168.20.37
+[DHCP]   |- Subnet Mask       : 255.255.255.0
+[DHCP]   \- Gateway IP        : 192.168.20.1
 =============================================================
 
-[NETBOOT] Target TFTP Server : 192.168.20.94 (Ubuntu Host)
-[NETBOOT] Sending ARP Request for TFTP Server (192.168.20.94)...
-[NETBOOT] Server MAC Resolved: 24:41:8C:F1:9B:45
-[NETBOOT] Requesting file 'mpfs-baremetal.bin' via TFTP...
+[NETBOOT] Target TFTP Server : 192.168.20.94 (Host Configuration)
+[NETBOOT] Sending ARP Request for 192.168.20.94 (Attempt 1/4)...
+[NETBOOT] Hardware MAC Resolved: 24:41:8C:F1:9B:45
+[NETBOOT] Requesting file 'boot.bin' via TFTP...
 
 [NETBOOT] Transfer complete! Total: 34928 bytes
-[NETBOOT] Quiescing GEM0 MAC...
+[NETBOOT] Quiescing GEM MAC...
 [NETBOOT] MAC released.
 [CLI] Transfer complete (34928 bytes). Dispatching harts to 0x0000000080000000...
 
-
-
+[NETBOOT] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...
+[NETBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).
+[NETBOOT] Returning to HSS TinyCLI.
 ```
+
+### Expected Output: MPFS Icicle Kit (VSC8662 / Port J1 / Cross-MAC MDIO)
+```text
+>> netboot
+
+[CLI] Initiating Netboot service...
+
+================ [NETBOOT: HARDWARE INIT] ================
+[NETBOOT] [1/5] Cycling GEM peripheral reset and clock...
+[NETBOOT] [2/5] Configuring GEM MAC Core...
+[NETBOOT]       Station MAC Address : 00:04:A3:11:22:33
+[NETBOOT] [3/5] Probing Hardware Registers (PHY Addr: 8)...
+[NETBOOT]       PHY ID 1 (Reg 0x02) : 0x0007
+[NETBOOT]       PHY ID 2 (Reg 0x03) : 0x0660
+[NETBOOT] [4/5] Priming DMA Descriptor Queues in Polled Mode...
+[NETBOOT] [5/5] Waiting for Copper Auto-Negotiation...
+[NETBOOT]       Link State          : UP
+[NETBOOT]       Negotiated Speed    : 1000 Mbps (Gigabit)
+[NETBOOT]       Duplex Mode         : Full Duplex
+[NETBOOT] Allowing switch port to enter forwarding state (3.0s)...
+================ [NETBOOT: DHCP NEGOTIATION] ================
+[DHCP] Broadcasting DHCP Discover (Attempt 1/6)...
+[DHCP] DHCP Offer Successfully Received!
+[DHCP]   |- Assigned Board IP : 192.168.20.75
+[DHCP]   |- Subnet Mask       : 255.255.255.128
+[DHCP]   \- Gateway IP        : 192.168.20.1
+=============================================================
+
+[NETBOOT] Target TFTP Server : 192.168.20.94 (Host Configuration)
+[NETBOOT] Sending ARP Request for 192.168.20.94 (Attempt 1/4)...
+[NETBOOT] Hardware MAC Resolved: 24:41:8C:F1:9B:45
+[NETBOOT] Requesting file 'boot.bin' via TFTP...
+
+[NETBOOT] Transfer complete! Total: 34928 bytes
+[NETBOOT] Quiescing GEM MAC...
+[NETBOOT] MAC released.
+[CLI] Transfer complete (34928 bytes). Dispatching harts to 0x0000000080000000...
+
+[NETBOOT] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...
+[NETBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).
+```
+
 
 
 

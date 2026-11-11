@@ -250,6 +250,18 @@ static bool netboot_hw_init(void)
     mac_config.pcs_phy_addr          = s_hw_cfg->pcs_phy_addr;
     mac_config.interface_type        = s_hw_cfg->interface_type;
 
+    /* Handle Cross-MAC MDIO Routing */
+    if (s_hw_cfg->phy_controller) {
+        mac_config.phy_controller = s_hw_cfg->phy_controller;
+        if (s_hw_cfg->phy_controller == &g_mac1) {
+            g_mac1.mac_base = (MAC_TypeDef *)0x20112000UL;
+            g_mac1.mac_base->NETWORK_CONTROL |= GEM_MAN_PORT_EN;
+        } else if (s_hw_cfg->phy_controller == &g_mac0) {
+            g_mac0.mac_base = (MAC_TypeDef *)0x20110000UL;
+            g_mac0.mac_base->NETWORK_CONTROL |= GEM_MAN_PORT_EN;
+        }
+    }
+
     mac_config.phy_init              = s_hw_cfg->phy_init;
     mac_config.phy_set_link_speed    = s_hw_cfg->phy_set_link_speed;
     mac_config.phy_autonegotiate     = s_hw_cfg->phy_autonegotiate;
@@ -258,7 +270,7 @@ static bool netboot_hw_init(void)
     memcpy(mac_config.mac_addr, s_mac_addr, 6);
 
     MSS_MAC_init(ACTIVE_MAC, &mac_config);
-
+    
     ACTIVE_MAC->mac_q_int[0] = 0;
     ACTIVE_MAC->mac_q_int[1] = 0;
     ACTIVE_MAC->mac_q_int[2] = 0;
