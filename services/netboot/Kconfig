@@ -6,6 +6,13 @@ menuconfig SERVICE_NETBOOT
 
 if SERVICE_NETBOOT
 
+config NETBOOT_AUTO_FALLBACK
+    bool "Automatic Fallback to Netboot on Boot Failure"
+    default y
+    help
+      Automatically attempts to fetch and execute an image over TFTP if
+      local storage media (SD card, eMMC, QSPI) does not contain a valid image.
+
 config NETBOOT_DEFAULT_SERVER_IP
     string "Default TFTP Server IP"
     default "192.168.20.94"

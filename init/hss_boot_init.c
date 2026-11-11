@@ -23,6 +23,12 @@
 #include "hss_trigger.h"
 #include "u54_state.h"
 
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+#include "services/netboot/netboot_service.h"
+#endif
+
+
 #if IS_ENABLED(CONFIG_SERVICE_SPI) || IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM)
 #  include <mss_sys_services.h>
 #endif
@@ -253,6 +259,38 @@ bool HSS_BootInit(void)
     }
 
     HSS_PerfCtr_Lap(perf_ctr_index);
+
+    #if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+    /* If all local media boot attempts failed, fall back to Netboot */
+        if (!result) {
+            mHSS_PRINTF("\n[BOOT] Local media boot failed. Initiating automatic Netboot fallback...\n");
+
+            size_t bytes_read = 0;
+
+            #ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+            #define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+            #endif
+
+            #ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
+            #define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
+            #endif
+
+            netboot_status_t status = NETBOOT_Service_FetchImage(
+                0, /* 0 triggers auto-discovery (Option 66 / siaddr / Kconfig fallback) */
+                CONFIG_NETBOOT_DEFAULT_FILENAME,
+                (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
+                &bytes_read
+            );
+
+            if (status == NETBOOT_STATUS_OK) {
+                mHSS_PRINTF("[BOOT] Netboot download complete (%lu bytes).\n", (unsigned long)bytes_read);
+                netboot_jump((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR);
+                result = false; /* Keeps Hart 0 in TinyCLI while U54 application runs */
+            } else {
+                mHSS_PRINTF("[BOOT] Netboot fallback failed with error code: %d\n", status);
+            }
+        }
+    #endif
 #endif
 
     return result;
