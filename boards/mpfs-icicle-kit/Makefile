@@ -111,6 +111,36 @@ ifdef CONFIG_SERVICE_SERIALBOOT
 endif
 
 
+################################################################################################
+#
+# Extra hardware dependency rules for Ethernet interface
+
+ifdef CONFIG_SERVICE_NETBOOT
+
+MSS_ETH_DIR := baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_ethernet_mac
+
+INCLUDES += -Iservices/netboot \
+            -Ibaremetal/polarfire-soc-bare-metal-library/src/platform \
+            -I$(MSS_ETH_DIR)
+
+SRCS-$(CONFIG_SERVICE_NETBOOT) += \
+    services/netboot/netboot_service.c \
+    boards/mpfs-icicle-kit/board_eth.c \
+    $(MSS_ETH_DIR)/mss_ethernet_mac.c \
+    $(MSS_ETH_DIR)/vsc8662_phy.c \
+    $(MSS_ETH_DIR)/null_phy.c
+
+CFLAGS += -DTARGET_G5_SOC=1 \
+          -DMSS_MAC_64_BIT_ADDRESS_MODE=1 \
+          -DMSS_MAC_SIMPLE_TX_QUEUE=1 \
+          -include $(BOARD_DIR)/mss_ethernet_mac_sw_cfg.h
+
+$(BINDIR)/$(MSS_ETH_DIR)/%.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/$(BOARD_DIR)/board_eth.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+
+endif
+
+
 
 ################################################################################################
 #

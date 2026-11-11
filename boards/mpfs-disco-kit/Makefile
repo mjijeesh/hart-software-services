@@ -131,7 +131,8 @@ SRCS-$(CONFIG_SERVICE_NETBOOT) += \
 # Target hardware and 64-bit architecture definitions
 CFLAGS += -DTARGET_G5_SOC=1 \
           -DMSS_MAC_64_BIT_ADDRESS_MODE=1 \
-          -DMSS_MAC_SIMPLE_TX_QUEUE=1
+          -DMSS_MAC_SIMPLE_TX_QUEUE=1 \
+		  -include $(BOARD_DIR)/mss_ethernet_mac_sw_cfg.h
 
 # Compile baremetal driver source files with GCC extensions and suppressed warnings
 $(BINDIR)/$(MSS_ETH_DIR)/%.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
