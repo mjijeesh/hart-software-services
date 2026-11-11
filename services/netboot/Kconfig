@@ -1,20 +1,27 @@
 menuconfig SERVICE_NETBOOT
-    bool "Ethernet Network Boot (TFTP) Service"
-    default n
-    select DRIVER_MSS_ETHERNET
+    bool "Network Booting (Netboot via TFTP/DHCP)"
+    default y
     help
-      Enables the isolated Netboot service in HSS.
-      Provides an on-demand TFTP bootloader over the MSS Gigabit Ethernet MAC.
-      Drivers and buffers remain idle until explicitly triggered.
+      Enables the baremetal netboot service using GEM0/GEM1.
 
 if SERVICE_NETBOOT
 
-config SERVICE_NETBOOT_DEFAULT_SERVER_IP
-    hex "Default TFTP Server IPv4 (Hex 0x0A000001 = 10.0.0.1)"
-    default 0xC0A80164
+config NETBOOT_DEFAULT_SERVER_IP
+    string "Default TFTP Server IP"
+    default "192.168.20.94"
+    help
+      Fallback IP address of the TFTP server if not supplied via CLI or DHCP next-server.
 
-config SERVICE_NETBOOT_DEFAULT_BOARD_IP
-    hex "Default Board IPv4 (Hex 0xC0A80132 = 192.168.1.50)"
-    default 0xC0A80132
+config NETBOOT_DEFAULT_FILENAME
+    string "Default Boot Image Filename"
+    default "boot.bin"
+    help
+      Filename requested from TFTP server if no argument is passed in TinyCLI.
+
+config NETBOOT_DDR_DEST_ADDR
+    hex "Destination DDR Load Address"
+    default 0x80000000
+    help
+      Target physical memory address where the downloaded image will be staged.
 
 endif

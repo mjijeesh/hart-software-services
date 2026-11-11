@@ -123,6 +123,7 @@ INCLUDES += -Iservices/netboot \
 
 SRCS-$(CONFIG_SERVICE_NETBOOT) += \
     services/netboot/netboot_service.c \
+	boards/mpfs-disco-kit/board_eth.c \
     $(MSS_ETH_DIR)/mss_ethernet_mac.c \
     $(MSS_ETH_DIR)/vsc8221_phy.c \
     $(MSS_ETH_DIR)/null_phy.c
@@ -134,6 +135,7 @@ CFLAGS += -DTARGET_G5_SOC=1 \
 
 # Compile baremetal driver source files with GCC extensions and suppressed warnings
 $(BINDIR)/$(MSS_ETH_DIR)/%.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/$(BOARD_DIR)/board_eth.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
 
 endif
 ################################################################################################

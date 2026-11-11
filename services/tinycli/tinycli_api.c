@@ -1215,68 +1215,36 @@ static void tinyCLI_Resume_(void)
     *msip = 1u;
 }
 
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+#include "services/netboot/netboot_service.h"
 
-#include "netboot_service.h"
+#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+#endif
 
-extern void serialboot_jump(uintptr_t addr);
-
-/* Standalone, freestanding IPv4 string parser */
-static bool parse_ipv4_str(const char *str, uint32_t *ip_out)
-{
-    uint32_t octets[4] = {0};
-    int octet_idx = 0;
-
-    while (*str && octet_idx < 4) {
-        if (*str >= '0' && *str <= '9') {
-            octets[octet_idx] = octets[octet_idx] * 10 + (*str - '0');
-            if (octets[octet_idx] > 255) return false;
-        } else if (*str == '.') {
-            octet_idx++;
-        } else if (*str == ' ' || *str == '\0') {
-            break;
-        } else {
-            return false;
-        }
-        str++;
-    }
-
-    if (octet_idx != 3) return false;
-
-    *ip_out = (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
-    return true;
-}
+#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
+#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
+#endif
 
 static void tinyCLI_NetBoot_(void)
 {
-    uint32_t server_ip = 0xC0A8145EUL; /* Default: 192.168.20.94 */
-    const char *file   = "boot.bin";
-    uintptr_t ddr_addr = 0x80000000UL;
-    size_t loaded_len  = 0;
+    mHSS_PRINTF("\n[CLI] Initiating Netboot service...\n");
 
-    if (argc_tokenCount >= 2) {
-        if (!parse_ipv4_str(argv_tokenArray[1], &server_ip)) {
-            mHSS_PRINTF("Usage: netboot [server_ip] [filename] [load_addr]\n");
-            return;
-        }
-    }
-    if (argc_tokenCount >= 3) {
-        file = argv_tokenArray[2];
-    }
-    if (argc_tokenCount >= 4) {
-        ddr_addr = (uintptr_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[3]);
-    }
+    size_t bytes_read = 0;
+    /* Passing 0 triggers auto-discovery (DHCP siaddr / Option 66 / Kconfig fallback) */
+    netboot_status_t status = NETBOOT_Service_FetchImage(
+        0,
+        CONFIG_NETBOOT_DEFAULT_FILENAME,
+        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
+        &bytes_read
+    );
 
-    mHSS_PRINTF("[CLI] Initiating Netboot service...\n");
-    netboot_status_t status = NETBOOT_Service_FetchImage(server_ip, file, ddr_addr, &loaded_len);
-
-    if (status != NETBOOT_STATUS_OK) {
+    if (status == NETBOOT_STATUS_OK) {
+        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Dispatching harts to 0x%016lx...\n",
+                    (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
+        netboot_jump((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR);
+    } else {
         mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
-        return;
     }
-
-    mHSS_PRINTF("[CLI] Transfer complete (%u bytes). Dispatching harts to 0x%016lx...\n",
-                (unsigned int)loaded_len, ddr_addr);
-    netboot_jump(ddr_addr);
 }
 #endif

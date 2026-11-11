@@ -28,13 +28,25 @@ typedef int PLIC_IRQn_Type;
 #define PRV_M 3
 #endif
 
+#ifndef CONFIG_NETBOOT_DEFAULT_SERVER_IP
+#define CONFIG_NETBOOT_DEFAULT_SERVER_IP "192.168.20.94"
+#endif
+
+#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+#endif
+
 extern uint8_t PLIC_mac0_int_IRQHandler(void);
 
-#define MAC0_DEV (&g_mac0)
+#include "netboot_board.h"
+
+static const netboot_hw_config_t *s_hw_cfg = NULL;
+#define ACTIVE_MAC (s_hw_cfg->mac_dev)
+
 #define TFTP_PORT 69
 
 /* -------------------------------------------------------------------------- */
-/* Freestanding Linker Stubs & Prototypes                                     */
+/* Freestanding Linker Stubs & Helpers                                        */
 /* -------------------------------------------------------------------------- */
 
 uint32_t __bswapsi2(uint32_t u);
@@ -73,6 +85,39 @@ static inline uint32_t swap32(uint32_t v)
             ((v & 0xFF000000UL) >> 24));
 }
 
+static uint32_t parse_ip_str(const char *str)
+{
+    if (!str) return 0;
+    uint32_t ip = 0;
+    unsigned int octet = 0;
+    int dots = 0;
+
+    while (*str) {
+        if (*str >= '0' && *str <= '9') {
+            octet = octet * 10 + (unsigned int)(*str - '0');
+            if (octet > 255) return 0;
+        } else if (*str == '.') {
+            ip = (ip << 8) | (octet & 0xFF);
+            octet = 0;
+            dots++;
+            if (dots > 3) return 0;
+        } else {
+            break;
+        }
+        str++;
+    }
+
+    if (dots == 3) {
+        ip = (ip << 8) | (octet & 0xFF);
+        return ip;
+    }
+    return 0;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Hart Dispatcher                                                            */
+/* -------------------------------------------------------------------------- */
+
 static uint32_t s_netboot_txid = 0x1000;
 
 void netboot_jump(uintptr_t addr)
@@ -101,17 +146,19 @@ void netboot_jump(uintptr_t addr)
 /* Hardware State & Distinct Ring Buffers                                     */
 /* -------------------------------------------------------------------------- */
 
-static uint8_t s_mac_addr[6] = { 0x00, 0xFC, 0x00, 0x12, 0x34, 0x58 };
-static uint8_t s_board_ip[4] = { 192, 168, 20, 50 }; /* Matches host subnet */
+static uint8_t s_mac_addr[6]   = { 0x00, 0xFC, 0x00, 0x12, 0x34, 0x58 };
+static uint8_t s_board_ip[4]   = { 192, 168, 20, 50 }; /* Static fallback IP */
+static uint8_t s_netmask[4]    = { 255, 255, 255, 0 };
+static uint8_t s_gateway_ip[4] = { 0, 0, 0, 0 };
 static uint8_t s_server_mac[6];
-static bool s_driver_active = false;
+static bool s_driver_active    = false;
 
 static uint8_t s_rx_buffer[MSS_MAC_RX_RING_SIZE][1536] __attribute__((aligned(16)));
+static uint8_t s_rx_stage[1536] __attribute__((aligned(16)));
 static uint8_t s_tx_buffer[1536] __attribute__((aligned(16)));
 
 static volatile bool s_rx_packet_ready = false;
 static volatile uint32_t s_rx_packet_length = 0;
-static uint8_t *s_active_rx_ptr = NULL;
 
 static void mac_rx_callback(void *this_mac,
                             uint32_t queue_no,
@@ -120,14 +167,18 @@ static void mac_rx_callback(void *this_mac,
                             mss_mac_rx_desc_t *p_rx_desc,
                             void *p_user_data)
 {
-    (void)this_mac;
-    (void)queue_no;
     (void)p_rx_desc;
     (void)p_user_data;
 
-    s_active_rx_ptr = p_rx_data;
-    s_rx_packet_length = rx_length;
-    s_rx_packet_ready = true;
+    /* Stash newest packet if staging buffer is free */
+    if (!s_rx_packet_ready && rx_length <= sizeof(s_rx_stage)) {
+        memcpy(s_rx_stage, p_rx_data, rx_length);
+        s_rx_packet_length = rx_length;
+        s_rx_packet_ready = true;
+    }
+
+    /* Immediately replenish this descriptor so the hardware ring never starves */
+    MSS_MAC_receive_pkt((mss_mac_instance_t *)this_mac, queue_no, p_rx_data, NULL, MSS_MAC_INT_ENABLE);
 }
 
 static uint16_t checksum(const void *data, size_t len)
@@ -152,90 +203,93 @@ static bool netboot_hw_init(void)
 {
     mss_mac_cfg_t mac_config;
 
+    s_hw_cfg = NETBOOT_Board_GetConfig();
+    if (!s_hw_cfg || !s_hw_cfg->mac_dev) {
+        mHSS_PRINTF("[NETBOOT] ERROR: No valid board profile detected!\n");
+        return false;
+    }
+
+    if (s_hw_cfg->get_mac_address) {
+        s_hw_cfg->get_mac_address(s_mac_addr);
+    }
+
     mHSS_PRINTF("\n================ [NETBOOT: HARDWARE INIT] ================\n");
 
-    /* Step 1: Clock Enable and Full Hardware Reset Pulse */
-    mHSS_PRINTF("[NETBOOT] [1/5] Cycling GEM0 peripheral reset and clock...\n");
-    SYSREG->SUBBLK_CLOCK_CR |= (uint32_t)(1U << 1);
-    SYSREG->SOFT_RESET_CR   |= (uint32_t)(1U << 1); /* Assert reset */
+    /* Step 1: Clock & Soft Reset */
+    mHSS_PRINTF("[NETBOOT] [1/5] Cycling GEM peripheral reset and clock...\n");
+    SYSREG->SUBBLK_CLOCK_CR |= s_hw_cfg->sysreg_clk_mask;
+    SYSREG->SOFT_RESET_CR   |= s_hw_cfg->sysreg_rst_mask;
     for (volatile int d = 0; d < 10000; d++);
-    SYSREG->SOFT_RESET_CR   &= (uint32_t)~(1U << 1); /* Release reset */
+    SYSREG->SOFT_RESET_CR   &= ~s_hw_cfg->sysreg_rst_mask;
 
-    /* Step 2: MAC Driver Configuration */
-    mHSS_PRINTF("[NETBOOT] [2/5] Configuring GEM0 MAC Core...\n");
+    /* Step 2: Configure MAC Core */
+    mHSS_PRINTF("[NETBOOT] [2/5] Configuring GEM MAC Core...\n");
     mHSS_PRINTF("[NETBOOT]       Station MAC Address : %02X:%02X:%02X:%02X:%02X:%02X\n",
                 s_mac_addr[0], s_mac_addr[1], s_mac_addr[2],
                 s_mac_addr[3], s_mac_addr[4], s_mac_addr[5]);
 
     MSS_MAC_cfg_struct_def_init(&mac_config);
-
     mac_config.speed_duplex_select   = MSS_MAC_ANEG_ALL_SPEEDS;
     mac_config.tsu_clock_select      = 1U;
-    mac_config.phy_addr              = 11U;
-    mac_config.phy_type              = MSS_MAC_DEV_PHY_VSC8221;
-    mac_config.phy_flags             = PHY_VSC8221_EEPROM_INIT;
-    mac_config.pcs_phy_addr          = 16U;
-    mac_config.interface_type        = TBI;
+    mac_config.phy_addr              = s_hw_cfg->phy_addr;
+    mac_config.phy_type              = s_hw_cfg->phy_type;
+    mac_config.phy_flags             = s_hw_cfg->phy_flags;
+    mac_config.pcs_phy_addr          = s_hw_cfg->pcs_phy_addr;
+    mac_config.interface_type        = s_hw_cfg->interface_type;
 
-    mac_config.phy_init              = MSS_MAC_VSC8221_phy_init;
-    mac_config.phy_set_link_speed    = MSS_MAC_VSC8221_phy_set_link_speed;
-    mac_config.phy_autonegotiate     = MSS_MAC_VSC8221_phy_autonegotiate;
-    mac_config.phy_mac_autonegotiate = MSS_MAC_VSC8221_mac_autonegotiate;
-    mac_config.phy_get_link_status   = MSS_MAC_VSC8221_phy_get_link_status;
+    mac_config.phy_init              = s_hw_cfg->phy_init;
+    mac_config.phy_set_link_speed    = s_hw_cfg->phy_set_link_speed;
+    mac_config.phy_autonegotiate     = s_hw_cfg->phy_autonegotiate;
+    mac_config.phy_mac_autonegotiate = s_hw_cfg->phy_mac_autonegotiate;
+    mac_config.phy_get_link_status   = s_hw_cfg->phy_get_link_status;
     memcpy(mac_config.mac_addr, s_mac_addr, 6);
 
-    MSS_MAC_init(MAC0_DEV, &mac_config);
+    MSS_MAC_init(ACTIVE_MAC, &mac_config);
 
-    MAC0_DEV->mac_q_int[0] = 0;
-    MAC0_DEV->mac_q_int[1] = 0;
-    MAC0_DEV->mac_q_int[2] = 0;
-    MAC0_DEV->mac_q_int[3] = 0;
+    ACTIVE_MAC->mac_q_int[0] = 0;
+    ACTIVE_MAC->mac_q_int[1] = 0;
+    ACTIVE_MAC->mac_q_int[2] = 0;
+    ACTIVE_MAC->mac_q_int[3] = 0;
 
-    MAC0_DEV->mac_base->NETWORK_CONFIG |= GEM_COPY_ALL_FRAMES;
+    ACTIVE_MAC->mac_base->NETWORK_CONFIG |= GEM_COPY_ALL_FRAMES;
+    ACTIVE_MAC->mac_base->NETWORK_CONTROL &= ~GEM_ENABLE_TRANSMIT;
+    ACTIVE_MAC->mac_base->TX_Q_SEG_ALLOC_Q0TO3 = 2;
+    ACTIVE_MAC->mac_base->NETWORK_CONTROL |= GEM_ENABLE_TRANSMIT;
 
-    MAC0_DEV->mac_base->NETWORK_CONTROL &= ~GEM_ENABLE_TRANSMIT;
-    MAC0_DEV->mac_base->TX_Q_SEG_ALLOC_Q0TO3 = 2;
-    MAC0_DEV->mac_base->NETWORK_CONTROL |= GEM_ENABLE_TRANSMIT;
-
-    /* Step 3: Verify Hardware PHY Identification Registers */
-    uint16_t phy_id1 = MSS_MAC_read_phy_reg(MAC0_DEV, 11U, MII_PHYSID1);
-    uint16_t phy_id2 = MSS_MAC_read_phy_reg(MAC0_DEV, 11U, MII_PHYSID2);
-    mHSS_PRINTF("[NETBOOT] [3/5] Probing VSC8221 Hardware Registers...\n");
+    /* Step 3: Probe Hardware PHY Identification */
+    uint16_t phy_id1 = MSS_MAC_read_phy_reg(ACTIVE_MAC, s_hw_cfg->phy_addr, MII_PHYSID1);
+    uint16_t phy_id2 = MSS_MAC_read_phy_reg(ACTIVE_MAC, s_hw_cfg->phy_addr, MII_PHYSID2);
+    mHSS_PRINTF("[NETBOOT] [3/5] Probing Hardware Registers (PHY Addr: %u)...\n", s_hw_cfg->phy_addr);
     mHSS_PRINTF("[NETBOOT]       PHY ID 1 (Reg 0x02) : 0x%04X\n", phy_id1);
     mHSS_PRINTF("[NETBOOT]       PHY ID 2 (Reg 0x03) : 0x%04X\n", phy_id2);
 
-    /* Step 4: Prime RX Ring Buffers in Polled Mode */
+    /* Step 4: Prime Descriptors */
     mHSS_PRINTF("[NETBOOT] [4/5] Priming DMA Descriptor Queues in Polled Mode...\n");
-    MSS_MAC_set_rx_callback(MAC0_DEV, 0, mac_rx_callback);
+    MSS_MAC_set_rx_callback(ACTIVE_MAC, 0, mac_rx_callback);
     for (uint32_t i = 0; i < MSS_MAC_RX_RING_SIZE; ++i) {
-        if (i != (MSS_MAC_RX_RING_SIZE - 1)) {
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, s_rx_buffer[i], NULL, MSS_MAC_INT_DISABLE);
-        } else {
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, s_rx_buffer[i], NULL, MSS_MAC_INT_ARM);
-        }
+        MSS_MAC_receive_pkt(ACTIVE_MAC, 0, s_rx_buffer[i], NULL,
+                            (i == MSS_MAC_RX_RING_SIZE - 1) ? MSS_MAC_INT_ARM : MSS_MAC_INT_DISABLE);
     }
 
-    /* Step 5: Wait for Link Auto-Negotiation */
+    /* Step 5: Wait for Copper Auto-Negotiation */
     mHSS_PRINTF("[NETBOOT] [5/5] Waiting for Copper Auto-Negotiation...");
-
     mss_mac_speed_t speed = MSS_MAC_1000MBPS;
     uint8_t duplex = 1;
     uint32_t retries = 50;
     bool link_ok = false;
 
     while (retries--) {
-        if (MSS_MAC_get_link_status(MAC0_DEV, &speed, &duplex) != 0) {
+        if (MSS_MAC_get_link_status(s_hw_cfg->mac_dev, &speed, &duplex) != 0) {
             link_ok = true;
             break;
         }
-        MSS_MAC_delay(MAC0_DEV, 100000);
+        MSS_MAC_delay(s_hw_cfg->mac_dev, 100000);
         mHSS_PRINTF(".");
     }
     mHSS_PRINTF("\n");
 
     if (!link_ok) {
         mHSS_PRINTF("[NETBOOT] ERROR: Link timeout! Please verify Ethernet cable.\n");
-        mHSS_PRINTF("==========================================================\n\n");
         return false;
     }
 
@@ -245,11 +299,8 @@ static bool netboot_hw_init(void)
                 (speed == MSS_MAC_100MBPS)  ? "100 Mbps (Fast Ethernet)" : "10 Mbps");
     mHSS_PRINTF("[NETBOOT]       Duplex Mode         : %s\n", duplex ? "Full Duplex" : "Half Duplex");
 
-    /* Critical: Allow switch port forwarding / STP learning time */
-    mHSS_PRINTF("[NETBOOT] Allowing switch port to enter forwarding state (1.5s)...\n");
-    MSS_MAC_delay(MAC0_DEV, 1500000);
-
-    mHSS_PRINTF("==========================================================\n\n");
+    mHSS_PRINTF("[NETBOOT] Allowing switch port to enter forwarding state (3.0s)...\n");
+    MSS_MAC_delay(ACTIVE_MAC, 3000000);
 
     s_driver_active = true;
     return true;
@@ -259,11 +310,11 @@ void NETBOOT_Service_Deinit(void)
 {
     if (!s_driver_active) return;
 
-    mHSS_PRINTF("[NETBOOT] Quiescing GEM0 MAC...\n");
+    mHSS_PRINTF("[NETBOOT] Quiescing GEM MAC...\n");
 
-    if (g_mac0.mac_base) {
-        g_mac0.mac_base->NETWORK_CONTROL = 0;
-        g_mac0.mac_base->INT_DISABLE = 0xFFFFFFFFUL;
+    if (ACTIVE_MAC && ACTIVE_MAC->mac_base) {
+        ACTIVE_MAC->mac_base->NETWORK_CONTROL = 0;
+        ACTIVE_MAC->mac_base->INT_DISABLE = 0xFFFFFFFFUL;
     }
 
     s_driver_active = false;
@@ -271,7 +322,7 @@ void NETBOOT_Service_Deinit(void)
 }
 
 /* -------------------------------------------------------------------------- */
-/* Dynamic DHCP Client with Active Retransmission                             */
+/* Dynamic DHCP Client with Robust Option Extraction                          */
 /* -------------------------------------------------------------------------- */
 
 static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
@@ -285,7 +336,8 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
     memcpy(&frame[6], s_mac_addr, 6);
     frame[12] = 0x08; frame[13] = 0x00;
 
-    uint16_t dhcp_payload_len = 256;
+    /* Minimum 300 bytes payload ensures Option 255 (End) is fully enclosed */
+    uint16_t dhcp_payload_len = 300;
     uint16_t udp_len = 8 + dhcp_payload_len;
     uint16_t ip_len  = 20 + udp_len;
     uint32_t total_len = 14 + ip_len;
@@ -319,27 +371,30 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
     memcpy(&dhcp[28], s_mac_addr, 6);
 
     dhcp[236] = 0x63; dhcp[237] = 0x82; dhcp[238] = 0x53; dhcp[239] = 0x63;
-    dhcp[240] = 53; dhcp[241] = 1; dhcp[242] = 1;
-    dhcp[243] = 55; dhcp[244] = 3; dhcp[245] = 1; dhcp[246] = 3; dhcp[247] = 6;
-    dhcp[248] = 12; dhcp[249] = 5; memcpy(&dhcp[250], "Polar", 5);
-    dhcp[255] = 255;
+    dhcp[240] = 53; dhcp[241] = 1; dhcp[242] = 1; /* DHCP Discover */
+    dhcp[243] = 55; dhcp[244] = 4;
+    dhcp[245] = 1;  /* Subnet Mask */
+    dhcp[246] = 3;  /* Router/Gateway */
+    dhcp[247] = 54; /* DHCP Server ID */
+    dhcp[248] = 66; /* TFTP Server Name / IP */
+    dhcp[249] = 12; dhcp[250] = 5; memcpy(&dhcp[251], "Polar", 5);
+    dhcp[256] = 255; /* End Option */
 
-    /* Up to 4 retransmission attempts (1 second wait per attempt) */
-    for (uint32_t attempt = 1; attempt <= 4; attempt++) {
-        mHSS_PRINTF("[DHCP] Broadcasting DHCP Discover (Attempt %u/4)...\n", attempt);
-        MSS_MAC_send_pkt(MAC0_DEV, 0, frame, total_len, NULL);
+    /* Up to 6 retransmission attempts (1200ms per attempt) */
+    for (uint32_t attempt = 1; attempt <= 6; attempt++) {
+        mHSS_PRINTF("[DHCP] Broadcasting DHCP Discover (Attempt %u/6)...\n", attempt);
+        MSS_MAC_send_pkt(ACTIVE_MAC, 0, frame, total_len, NULL);
 
-        for (uint32_t t = 0; t < 200 && MAC0_DEV->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
+        for (uint32_t t = 0; t < 200 && ACTIVE_MAC->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
             PLIC_mac0_int_IRQHandler();
-            MSS_MAC_delay(MAC0_DEV, 20);
+            MSS_MAC_delay(ACTIVE_MAC, 20);
         }
 
-        for (uint32_t ms = 0; ms < 1000; ++ms) {
+        for (uint32_t ms = 0; ms < 1200; ++ms) {
             PLIC_mac0_int_IRQHandler();
 
             if (s_rx_packet_ready) {
-                s_rx_packet_ready = false;
-                uint8_t *rx = s_active_rx_ptr;
+                uint8_t *rx = s_rx_stage;
                 uint32_t len = s_rx_packet_length;
 
                 if (len >= 282 && rx[12] == 0x08 && rx[13] == 0x00 && rx[23] == 17) {
@@ -353,44 +408,65 @@ static bool acquire_dhcp_lease(uint32_t *discovered_server_ip)
 
                         if (rx_xid == xid && rx_dhcp[0] == 0x02) {
                             memcpy(s_board_ip, &rx_dhcp[16], 4);
-                            uint32_t srv_ip = ((uint32_t)rx_dhcp[20] << 24) |
+
+                            uint32_t siaddr = ((uint32_t)rx_dhcp[20] << 24) |
                                               ((uint32_t)rx_dhcp[21] << 16) |
                                               ((uint32_t)rx_dhcp[22] << 8)  |
                                               (uint32_t)rx_dhcp[23];
 
-                            if (srv_ip == 0) {
-                                uint8_t *opt = &rx_dhcp[240];
-                                while (*opt != 255 && (opt - rx_dhcp) < (int)len) {
-                                    if (*opt == 54 && *(opt + 1) == 4) {
-                                        srv_ip = ((uint32_t)opt[2] << 24) |
-                                                 ((uint32_t)opt[3] << 16) |
-                                                 ((uint32_t)opt[4] << 8)  |
-                                                 (uint32_t)opt[5];
-                                        break;
-                                    }
-                                    opt += (2 + *(opt + 1));
+                            uint32_t opt66_ip = 0;
+
+                            uint8_t *opt = &rx_dhcp[240];
+                            while (*opt != 255 && (opt - rx_dhcp) < (int)len) {
+                                uint8_t opt_code = opt[0];
+                                uint8_t opt_len  = opt[1];
+
+                                if (opt_code == 1 && opt_len == 4) {
+                                    memcpy(s_netmask, &opt[2], 4);
+                                } else if (opt_code == 3 && opt_len >= 4) {
+                                    memcpy(s_gateway_ip, &opt[2], 4);
+                                } else if (opt_code == 66 && opt_len > 0) {
+                                    char opt66_buf[64] = {0};
+                                    size_t copy_len = (opt_len < 63) ? opt_len : 63;
+                                    memcpy(opt66_buf, &opt[2], copy_len);
+                                    opt66_ip = parse_ip_str(opt66_buf);
                                 }
+                                opt += (2 + opt_len);
                             }
 
                             mHSS_PRINTF("[DHCP] DHCP Offer Successfully Received!\n");
                             mHSS_PRINTF("[DHCP]   |- Assigned Board IP : %u.%u.%u.%u\n",
                                         s_board_ip[0], s_board_ip[1], s_board_ip[2], s_board_ip[3]);
-                            mHSS_PRINTF("[DHCP]   \\- Gateway/Server IP : %u.%u.%u.%u\n",
-                                        (srv_ip >> 24) & 0xFF, (srv_ip >> 16) & 0xFF,
-                                        (srv_ip >> 8) & 0xFF, srv_ip & 0xFF);
-                            mHSS_PRINTF("=============================================================\n\n");
+                            mHSS_PRINTF("[DHCP]   |- Subnet Mask       : %u.%u.%u.%u\n",
+                                        s_netmask[0], s_netmask[1], s_netmask[2], s_netmask[3]);
+                            mHSS_PRINTF("[DHCP]   \\- Gateway IP        : %u.%u.%u.%u\n",
+                                        s_gateway_ip[0], s_gateway_ip[1], s_gateway_ip[2], s_gateway_ip[3]);
 
-                            if (discovered_server_ip && srv_ip != 0) {
-                                *discovered_server_ip = srv_ip;
+                            uint32_t gw_u32 = ((uint32_t)s_gateway_ip[0] << 24) |
+                                              ((uint32_t)s_gateway_ip[1] << 16) |
+                                              ((uint32_t)s_gateway_ip[2] << 8)  |
+                                              (uint32_t)s_gateway_ip[3];
+
+                            /* Only adopt siaddr if it is NOT the router echoing its own gateway address */
+                            if (discovered_server_ip) {
+                                if (opt66_ip != 0) {
+                                    *discovered_server_ip = opt66_ip;
+                                } else if (siaddr != 0 && siaddr != gw_u32) {
+                                    *discovered_server_ip = siaddr;
+                                } else {
+                                    *discovered_server_ip = 0; /* Fall back to Kconfig default server */
+                                }
                             }
-                            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
+
+                            s_rx_packet_ready = false;
+                            mHSS_PRINTF("=============================================================\n\n");
                             return true;
                         }
                     }
                 }
-                MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
+                s_rx_packet_ready = false;
             }
-            MSS_MAC_delay(MAC0_DEV, 1000);
+            MSS_MAC_delay(ACTIVE_MAC, 1000);
         }
     }
 
@@ -423,43 +499,45 @@ static bool resolve_arp(uint32_t target_ip)
     uint32_t t_ip = swap32(target_ip);
     memcpy(&arp_pkt[38], &t_ip, 4);
 
-    /* Up to 4 retransmission attempts (750ms wait per attempt) */
     for (uint32_t attempt = 1; attempt <= 4; attempt++) {
         mHSS_PRINTF("[NETBOOT] Sending ARP Request for %u.%u.%u.%u (Attempt %u/4)...\n",
                     (target_ip >> 24) & 0xFF, (target_ip >> 16) & 0xFF,
                     (target_ip >> 8) & 0xFF, target_ip & 0xFF, attempt);
 
-        MSS_MAC_send_pkt(MAC0_DEV, 0, arp_pkt, sizeof(arp_pkt), NULL);
+        MSS_MAC_send_pkt(ACTIVE_MAC, 0, arp_pkt, sizeof(arp_pkt), NULL);
 
-        for (uint32_t t = 0; t < 200 && MAC0_DEV->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
+        for (uint32_t t = 0; t < 200 && ACTIVE_MAC->queue[0].nb_available_tx_desc < MSS_MAC_TX_RING_SIZE; ++t) {
             PLIC_mac0_int_IRQHandler();
-            MSS_MAC_delay(MAC0_DEV, 20);
+            MSS_MAC_delay(ACTIVE_MAC, 20);
         }
 
         for (uint32_t ms = 0; ms < 750; ++ms) {
             PLIC_mac0_int_IRQHandler();
 
             if (s_rx_packet_ready) {
-                s_rx_packet_ready = false;
-                uint8_t *rx = s_active_rx_ptr;
+                uint8_t *rx = s_rx_stage;
 
                 if (s_rx_packet_length >= 42 && rx[12] == 0x08 && rx[13] == 0x06) {
                     if (rx[21] == 0x02) {
                         memcpy(s_server_mac, &rx[6], 6);
-                        mHSS_PRINTF("[NETBOOT] Server MAC Resolved: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                        mHSS_PRINTF("[NETBOOT] Hardware MAC Resolved: %02X:%02X:%02X:%02X:%02X:%02X\n",
                                     s_server_mac[0], s_server_mac[1], s_server_mac[2],
                                     s_server_mac[3], s_server_mac[4], s_server_mac[5]);
-                        MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
+                        s_rx_packet_ready = false;
                         return true;
                     }
                 }
-                MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
+                s_rx_packet_ready = false;
             }
-            MSS_MAC_delay(MAC0_DEV, 1000);
+            MSS_MAC_delay(ACTIVE_MAC, 1000);
         }
     }
     return false;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Dynamic Image Retrieval Engine                                             */
+/* -------------------------------------------------------------------------- */
 
 netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
                                             const char *filename,
@@ -472,17 +550,63 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
     }
 
     uint32_t dhcp_server_ip = 0;
-    acquire_dhcp_lease(&dhcp_server_ip);
+    bool lease_ok = acquire_dhcp_lease(&dhcp_server_ip);
 
-    server_ip = 0xC0A8145EUL; /* 192.168.20.94 */
-    mHSS_PRINTF("[NETBOOT] Target TFTP Server : 192.168.20.94 (Ubuntu Host)\n");
+    /* Determine target TFTP server IP */
+    if (server_ip == 0) {
+        if (lease_ok && dhcp_server_ip != 0) {
+            server_ip = dhcp_server_ip;
+            mHSS_PRINTF("[NETBOOT] Target TFTP Server : %u.%u.%u.%u (Auto-discovered)\n",
+                        (server_ip >> 24) & 0xFF, (server_ip >> 16) & 0xFF,
+                        (server_ip >> 8) & 0xFF, server_ip & 0xFF);
+        } else {
+            server_ip = parse_ip_str(CONFIG_NETBOOT_DEFAULT_SERVER_IP);
+            if (server_ip == 0) {
+                server_ip = 0xC0A8145EUL; /* 192.168.20.94 */
+            }
+            mHSS_PRINTF("[NETBOOT] Target TFTP Server : %u.%u.%u.%u (Host Configuration)\n",
+                        (server_ip >> 24) & 0xFF, (server_ip >> 16) & 0xFF,
+                        (server_ip >> 8) & 0xFF, server_ip & 0xFF);
+        }
+    } else {
+        mHSS_PRINTF("[NETBOOT] Target TFTP Server : %u.%u.%u.%u (CLI specified)\n",
+                    (server_ip >> 24) & 0xFF, (server_ip >> 16) & 0xFF,
+                    (server_ip >> 8) & 0xFF, server_ip & 0xFF);
+    }
 
-    if (!resolve_arp(server_ip)) {
-        mHSS_PRINTF("[NETBOOT] ERROR: TFTP server MAC resolution timed out.\n");
+    /* Subnet Routing Decision */
+    uint32_t board_ip_u32 = ((uint32_t)s_board_ip[0] << 24) |
+                            ((uint32_t)s_board_ip[1] << 16) |
+                            ((uint32_t)s_board_ip[2] << 8)  |
+                            (uint32_t)s_board_ip[3];
+
+    uint32_t mask_u32     = ((uint32_t)s_netmask[0] << 24) |
+                            ((uint32_t)s_netmask[1] << 16) |
+                            ((uint32_t)s_netmask[2] << 8)  |
+                            (uint32_t)s_netmask[3];
+
+    uint32_t gateway_u32  = ((uint32_t)s_gateway_ip[0] << 24) |
+                            ((uint32_t)s_gateway_ip[1] << 16) |
+                            ((uint32_t)s_gateway_ip[2] << 8)  |
+                            (uint32_t)s_gateway_ip[3];
+
+    uint32_t arp_target_ip = server_ip;
+
+    if ((server_ip & mask_u32) != (board_ip_u32 & mask_u32)) {
+        if (gateway_u32 != 0) {
+            mHSS_PRINTF("[NETBOOT] Server is on remote subnet. Resolving Gateway (%u.%u.%u.%u)...\n",
+                        s_gateway_ip[0], s_gateway_ip[1], s_gateway_ip[2], s_gateway_ip[3]);
+            arp_target_ip = gateway_u32;
+        }
+    }
+
+    if (!resolve_arp(arp_target_ip)) {
+        mHSS_PRINTF("[NETBOOT] ERROR: MAC resolution timed out.\n");
         NETBOOT_Service_Deinit();
         return NETBOOT_STATUS_ARP_TIMEOUT;
     }
 
+    /* Prepare TFTP Request Packet */
     uint8_t *tx = s_tx_buffer;
     memset(tx, 0, sizeof(s_tx_buffer));
 
@@ -501,7 +625,7 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
     uint16_t src_port = 50000;
     uint16_t dst_port = TFTP_PORT;
     uint8_t *tftp_req = tx + 42;
-    *tftp_req++ = 0x00; *tftp_req++ = 0x01;
+    *tftp_req++ = 0x00; *tftp_req++ = 0x01; /* RRQ */
     strcpy((char *)tftp_req, filename);
     tftp_req += strlen(filename) + 1;
     strcpy((char *)tftp_req, "octet");
@@ -529,8 +653,8 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
 
     mHSS_PRINTF("[NETBOOT] Requesting file '%s' via TFTP...\n", filename);
 
-    MSS_MAC_send_pkt(MAC0_DEV, 0, tx, rrq_frame_len, NULL);
-    MAC0_DEV->mac_base->NETWORK_CONTROL |= GEM_ENABLE_RECEIVE;
+    MSS_MAC_send_pkt(ACTIVE_MAC, 0, tx, rrq_frame_len, NULL);
+    ACTIVE_MAC->mac_base->NETWORK_CONTROL |= GEM_ENABLE_RECEIVE;
 
     uint32_t rrq_retries = 5;
     uint32_t poll_count = 0;
@@ -539,8 +663,7 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
         PLIC_mac0_int_IRQHandler();
 
         if (s_rx_packet_ready) {
-            s_rx_packet_ready = false;
-            uint8_t *rx = s_active_rx_ptr;
+            uint8_t *rx = s_rx_stage;
             uint32_t rx_len = s_rx_packet_length;
 
             if (rx_len > 46 && rx[12] == 0x08 && rx[13] == 0x00 && rx[23] == 17) {
@@ -584,7 +707,7 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
                             tx[42] = 0x00; tx[43] = 0x04;
                             tx[44] = (block >> 8); tx[45] = (block & 0xFF);
 
-                            MSS_MAC_send_pkt(MAC0_DEV, 0, tx, 60, NULL);
+                            MSS_MAC_send_pkt(ACTIVE_MAC, 0, tx, 60, NULL);
                             expected_block++;
                             poll_count = 0;
 
@@ -608,17 +731,17 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
                     }
                 }
             }
-            MSS_MAC_receive_pkt(MAC0_DEV, 0, rx, NULL, MSS_MAC_INT_ENABLE);
+            s_rx_packet_ready = false;
         }
 
-        MSS_MAC_delay(MAC0_DEV, 1000);
+        MSS_MAC_delay(ACTIVE_MAC, 1000);
         poll_count++;
 
         if (expected_block == 1 && poll_count >= 1000) {
             poll_count = 0;
             if (rrq_retries > 0) {
                 mHSS_PRINTF("[NETBOOT] Retrying TFTP Read Request (%u attempts left)...\n", rrq_retries);
-                MSS_MAC_send_pkt(MAC0_DEV, 0, tx, rrq_frame_len, NULL);
+                MSS_MAC_send_pkt(ACTIVE_MAC, 0, tx, rrq_frame_len, NULL);
                 rrq_retries--;
             } else {
                 mHSS_PRINTF("\n[NETBOOT] ERROR: TFTP server not responding.\n");
