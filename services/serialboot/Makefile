@@ -26,7 +26,6 @@
 #
 
 SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
-	services/serialboot/serialboot.c \
-	services/serialboot/spi_flash.c \
+	services/serialboot/serialboot.c
 
-INCLUDES += -Iservices/serialboot \
+INCLUDES += -Iservices/serialboot

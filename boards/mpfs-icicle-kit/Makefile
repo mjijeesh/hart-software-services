@@ -99,16 +99,10 @@ endif
 
 ################################################################################################
 #
-# Extra hardware dependency rules for CoreSPI
+# Extra hardware dependency rules for CoreSPI Flash
 #
+EXTRA_SRCS-$(CONFIG_SPI_FLASH_CORESPI) += $(BOARD_DIR)/board_spi.c
 
-ifdef CONFIG_SERVICE_SERIALBOOT
-
-# If you created a board-level binding (e.g. board_spi.c), include it here as well:
- EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
-    $(BOARD_DIR)/board_spi.c
-
-endif
 
 
 ################################################################################################

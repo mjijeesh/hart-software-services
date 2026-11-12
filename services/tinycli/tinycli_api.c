@@ -472,8 +472,8 @@ static void tinyCLI_NetBoot_QSPI_(void)
 #endif
 #endif /* IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) */
 
-#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-#include "services/serialboot/spi_flash.h"
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
+#include "services/spi/spi_flash.h"
 
 #ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
 #define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
@@ -506,62 +506,14 @@ static void tinyCLI_NetBoot_SPI_(void)
         return;
     }
 
-    struct HSS_BootImage *pImg = (struct HSS_BootImage *)CONFIG_NETBOOT_DDR_DEST_ADDR;
-    if (!HSS_Boot_VerifyMagic(pImg)) {
-        mHSS_PRINTF("[SPI-FLASH] ERROR: Invalid HSS Boot Image magic at 0x%08lx!\n",
-                    (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
-        mHSS_PRINTF("[SPI-FLASH] Image must be packaged with hss-payload-generator (magic 0xb007c0de).\n");
-        return;
-    }
+    mHSS_PRINTF("[CLI] Downloaded %lu bytes to 0x%08lx. Programming SPI Flash...\n",
+                (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
 
-    spi_flash_init();
-    const struct spi_flash_info *info = spi_flash_get_info();
-    if (!info || info->mfr_id == 0x00 || info->mfr_id == 0xFF) {
-        mHSS_PRINTF("[SPI-FLASH] ERROR: No SPI Flash detected (JEDEC ID: 0x%02X).\n",
-                    info ? info->mfr_id : 0xFF);
-        return;
-    }
-
-    mHSS_PRINTF("[SPI-FLASH] Detected %s (MFR: 0x%02X, DEV: 0x%04X)\n",
-                info->name, info->mfr_id, info->device_id);
-
-    /* Preserve any header bytes preceding spi_offset inside the first 64 KiB erase block */
-    uint32_t sector_base   = spi_offset & ~(0xFFFFUL);
-    uint32_t prefix_len    = spi_offset & 0xFFFFUL;
-    uint8_t *prefix_backup = (uint8_t *)((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR + bytes_read + 64U);
-
-    if (prefix_len > 0U) {
-        mHSS_PRINTF("[SPI-FLASH] Backing up %u prefix bytes at 0x%x...\n", prefix_len, sector_base);
-        spi_flash_read(sector_base, prefix_backup, prefix_len);
-    }
-
-    mHSS_PRINTF("[SPI-FLASH] Erasing 64 KiB sectors covering 0x%x (%lu bytes)...\n",
-                spi_offset, (unsigned long)bytes_read);
-    spi_flash_erase_range(spi_offset, bytes_read);
-
-    if (prefix_len > 0U) {
-        spi_flash_program(sector_base, prefix_backup, prefix_len);
-    }
-
-    mHSS_PRINTF("[SPI-FLASH] Programming %lu bytes to 0x%x...\n",
-                (unsigned long)bytes_read, spi_offset);
-    spi_flash_program(spi_offset, (const uint8_t *)CONFIG_NETBOOT_DDR_DEST_ADDR, bytes_read);
-
-    /* Read back header to verify flash integrity */
-    struct HSS_BootImage verifyHdr;
-    memset(&verifyHdr, 0, sizeof(verifyHdr));
-    spi_flash_read(spi_offset, (uint8_t *)&verifyHdr, sizeof(verifyHdr));
-
-    if (HSS_Boot_VerifyMagic(&verifyHdr)) {
-        mHSS_PRINTF("[SPI-FLASH] SUCCESS: Payload verified in SPI Flash @ 0x%x! Reset board to boot.\n",
-                    spi_offset);
-    } else {
-        mHSS_PRINTF("[SPI-FLASH] ERROR: Read-back verification failed at 0x%x!\n", spi_offset);
-    }
+    spi_flash_write_payload(spi_offset, (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR, bytes_read);
 }
-#endif /* IS_ENABLED(CONFIG_SERVICE_SERIALBOOT) */
+#endif /* IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI) */
 
-#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
 static const struct tinycli_cmd netbootCmds[] = {
 #if IS_ENABLED(CONFIG_SERVICE_MMC)
     { CMD_NETBOOT_SD,   "SD",   "Download and flash payload to SD Card: NETBOOT SD [server_ip] [filename]",            tinyCLI_NetBoot_SD_ },
@@ -570,7 +522,7 @@ static const struct tinycli_cmd netbootCmds[] = {
 #if IS_ENABLED(CONFIG_SERVICE_QSPI)
     { CMD_NETBOOT_QSPI, "QSPI", "Download and flash payload to QSPI Flash: NETBOOT QSPI [server_ip] [filename]",         tinyCLI_NetBoot_QSPI_ },
 #endif
-#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
     { CMD_NETBOOT_SPI,  "SPI",  "Download and flash payload to SPI Flash: NETBOOT SPI [server_ip] [filename] [offset]",  tinyCLI_NetBoot_SPI_ },
 #endif
 };
@@ -578,7 +530,7 @@ static const struct tinycli_cmd netbootCmds[] = {
 
 static void tinyCLI_NetBoot_(void)
 {
-#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
     /* 1. Check if token 1 matches a storage subcommand (sd, emmc, qspi, spi) */
     if (argc_tokenCount > 1u) {
         if (dispatch_command_(netbootCmds, ARRAY_SIZE(netbootCmds), 1u)) {
