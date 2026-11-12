@@ -1,3 +1,5 @@
+# Added NETBOOT into the auto booting sequence
+
 
 # HSS Netboot Service 
 
