@@ -67,6 +67,10 @@
 #include "system_startup.h"
 #include "fpga_design_config/fpga_design_config.h"
 
+#if IS_ENABLED(CONFIG_COMPRESSION)
+#include "modules/compression/hss_decompress.h"
+#endif
+
 #if IS_ENABLED(CONFIG_CRYPTO_SIGNING)
 #  include "hss_boot_secure.h"
 #endif
