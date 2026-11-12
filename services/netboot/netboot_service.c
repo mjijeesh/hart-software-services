@@ -24,6 +24,17 @@ typedef int PLIC_IRQn_Type;
 #include "services/ipi_poll/ipi_poll_service.h"
 #include "sbi/riscv_encoding.h"
 
+
+#include "hss_boot_init.h"
+#include "hss_boot_service.h"
+
+#if IS_ENABLED(CONFIG_SERVICE_MMC)
+#include "mmc_service.h"
+#include "gpt.h"
+#endif
+
+
+
 #ifndef PRV_M
 #define PRV_M 3
 #endif
@@ -778,4 +789,130 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
             }
         }
     }
+}
+
+/* -------------------------------------------------------------------------- */
+/* Shared SD / eMMC Payload Programmer (Used by Netboot & Serialboot)         */
+/* -------------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------- */
+/* Shared SD / eMMC Payload Programmer (Used by Netboot & Serialboot)         */
+/* -------------------------------------------------------------------------- */
+
+#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_MMC)
+extern struct HSS_Storage *HSS_BootGetActiveStorage(void);
+extern bool HSS_Storage_Init(void);
+extern bool HSS_Storage_ReadBlock(void *pDest, size_t srcOffset, size_t byteCount);
+extern bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount);
+extern void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *pBlockCount);
+extern void HSS_Storage_FlushWriteBuffer(void);
+#endif
+
+bool NETBOOT_WritePayloadToMMC(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media)
+{
+#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_MMC)
+    if (byte_count == 0) {
+        mHSS_PRINTF("[MMC-FLASH] ERROR: Payload size is 0 bytes.\n");
+        return false;
+    }
+
+    struct HSS_BootImage *pImg = (struct HSS_BootImage *)ddr_addr;
+    if (!HSS_Boot_VerifyMagic(pImg)) {
+        mHSS_PRINTF("[MMC-FLASH] ERROR: Invalid HSS Boot Image magic at 0x%08lx!\n",
+                    (unsigned long)ddr_addr);
+        mHSS_PRINTF("[MMC-FLASH] Image must be packaged with hss-payload-generator (magic 0xb007c0de).\n");
+        return false;
+    }
+
+    if (media == NETBOOT_MEDIA_EMMC) {
+        mHSS_PRINTF("[MMC-FLASH] Selecting eMMC interface...\n");
+        HSS_BootSelectEMMC();
+    } else {
+        mHSS_PRINTF("[MMC-FLASH] Selecting SD Card interface...\n");
+        HSS_BootSelectSDCARD();
+    }
+
+    if (!HSS_Storage_Init()) {
+        mHSS_PRINTF("[MMC-FLASH] ERROR: Failed to initialize %s! Check card/jumpers.\n",
+                    (media == NETBOOT_MEDIA_EMMC) ? "eMMC" : "SD Card");
+        return false;
+    }
+
+    uint32_t blockSize = 512U, eraseSize = 512U, blockCount = 0U;
+    HSS_Storage_GetInfo(&blockSize, &eraseSize, &blockCount);
+    if (blockSize == 0U) {
+        blockSize = 512U;
+    }
+
+    size_t dstLBAOffset = 0U;
+
+#if IS_ENABLED(CONFIG_SERVICE_BOOT_MMC_USE_GPT)
+    {
+        HSS_GPT_t gpt;
+        gpt.lbaSize = blockSize;
+        GPT_Init(&gpt, HSS_BootGetActiveStorage());
+
+        if (GPT_ReadHeader(&gpt)) {
+            size_t partIndex = 0U;
+            if (GPT_GetBootPartitionIndex(&gpt, &partIndex) ||
+                GPT_FindBootSectorIndex(&gpt, &partIndex, NULL)) {
+                if (GPT_PartitionIdToLBAOffset(&gpt, partIndex, &dstLBAOffset)) {
+                    mHSS_PRINTF("[MMC-FLASH] GPT boot partition detected at LBA %lu.\n",
+                                (unsigned long)dstLBAOffset);
+                }
+            }
+        } else {
+            mHSS_PRINTF("[MMC-FLASH] No GPT header found; writing to raw LBA 0.\n");
+            dstLBAOffset = 0U;
+        }
+    }
+#endif
+
+    /* Pad write length up to an exact blockSize multiple */
+    size_t aligned_len = (byte_count + blockSize - 1U) & ~(size_t)(blockSize - 1U);
+    if (aligned_len > byte_count) {
+        memset((uint8_t *)(ddr_addr + byte_count), 0, aligned_len - byte_count);
+    }
+
+    uint64_t dstByteOffset = (uint64_t)dstLBAOffset * blockSize;
+    uint64_t totalCapacity = (uint64_t)blockCount * blockSize;
+
+    if (totalCapacity > 0 && (dstByteOffset + aligned_len) > totalCapacity) {
+        mHSS_PRINTF("[MMC-FLASH] ERROR: Image (%lu bytes) exceeds media capacity.\n",
+                    (unsigned long)aligned_len);
+        return false;
+    }
+
+    mHSS_PRINTF("[MMC-FLASH] Writing %lu bytes (aligned: %lu) to %s offset 0x%llx...\n",
+                (unsigned long)byte_count,
+                (unsigned long)aligned_len,
+                (media == NETBOOT_MEDIA_EMMC) ? "eMMC" : "SD Card",
+                (unsigned long long)dstByteOffset);
+
+    if (!HSS_Storage_WriteBlock((size_t)dstByteOffset, (void *)ddr_addr, aligned_len)) {
+        mHSS_PRINTF("[MMC-FLASH] ERROR: HSS_Storage_WriteBlock() failed!\n");
+        return false;
+    }
+
+    HSS_Storage_FlushWriteBuffer();
+
+    /* Read back header to verify flash integrity */
+    struct HSS_BootImage verifyHdr;
+    memset(&verifyHdr, 0, sizeof(verifyHdr));
+    if (HSS_Storage_ReadBlock(&verifyHdr, (size_t)dstByteOffset, sizeof(verifyHdr)) &&
+        HSS_Boot_VerifyMagic(&verifyHdr)) {
+        mHSS_PRINTF("[MMC-FLASH] SUCCESS: Payload verified on %s! Reset board to boot.\n",
+                    (media == NETBOOT_MEDIA_EMMC) ? "eMMC" : "SD Card");
+        return true;
+    }
+
+    mHSS_PRINTF("[MMC-FLASH] ERROR: Read-back verification failed!\n");
+    return false;
+#else
+    (void)ddr_addr;
+    (void)byte_count;
+    (void)media;
+    mHSS_PRINTF("[MMC-FLASH] ERROR: CONFIG_SERVICE_MMC is not enabled in this build.\n");
+    return false;
+#endif
 }

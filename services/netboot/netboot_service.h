@@ -12,14 +12,20 @@ typedef enum {
     NETBOOT_STATUS_TFTP_ERROR
 } netboot_status_t;
 
+typedef enum {
+    NETBOOT_MEDIA_SDCARD = 0,
+    NETBOOT_MEDIA_EMMC
+} netboot_media_t;
+
 netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
                                             const char *filename,
                                             uintptr_t dest_addr,
                                             size_t *bytes_read);
 
 void NETBOOT_Service_Deinit(void);
-
-/* Self-contained U54 Hart Dispatcher */
 void netboot_jump(uintptr_t addr);
+
+/* Writes a staged HSS payload from DDR to SD card or eMMC */
+bool NETBOOT_WritePayloadToMMC(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media);
 
 #endif /* NETBOOT_SERVICE_H */

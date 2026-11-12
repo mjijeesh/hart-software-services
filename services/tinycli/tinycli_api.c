@@ -48,9 +48,86 @@
 #include "mpfs_reg_map.h"
 #include "opensbi_service.h"
 
+
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+#include "services/netboot/netboot_service.h"
+
+#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+#endif
+
+#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
+#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
+#endif
+
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
     static void tinyCLI_NetBoot_(void);
 #endif
+
+static void tinyCLI_NetBoot_(void)
+{
+    mHSS_PRINTF("\n[CLI] Initiating Netboot service...\n");
+
+    size_t bytes_read = 0;
+    /* Passing 0 triggers auto-discovery (DHCP siaddr / Option 66 / Kconfig fallback) */
+    netboot_status_t status = NETBOOT_Service_FetchImage(
+        0,
+        CONFIG_NETBOOT_DEFAULT_FILENAME,
+        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
+        &bytes_read
+    );
+
+    if (status == NETBOOT_STATUS_OK) {
+        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Dispatching harts to 0x%016lx...\n",
+                    (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
+        netboot_jump((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR);
+    } else {
+        mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
+    }
+}
+#endif
+
+
+
+
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) && IS_ENABLED(CONFIG_SERVICE_MMC)
+static void netboot_fetch_and_flash_(netboot_media_t media)
+{
+    size_t bytes_read = 0;
+    netboot_status_t status = NETBOOT_Service_FetchImage(
+        0,
+        CONFIG_NETBOOT_DEFAULT_FILENAME,
+        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
+        &bytes_read
+    );
+
+    if (status != NETBOOT_STATUS_OK) {
+        mHSS_PRINTF("[CLI] Netboot download failed with error code: %d\n", status);
+        return;
+    }
+
+    mHSS_PRINTF("[CLI] Downloaded %lu bytes to 0x%08lx. Flashing storage...\n",
+                (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
+
+    NETBOOT_WritePayloadToMMC((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR, bytes_read, media);
+}
+
+static void tinyCLI_NetBootSD_(void)
+{
+    mHSS_PRINTF("\n[CLI] Netboot -> SD Card programming initiated...\n");
+    netboot_fetch_and_flash_(NETBOOT_MEDIA_SDCARD);
+}
+
+static void tinyCLI_NetBootEMMC_(void)
+{
+    mHSS_PRINTF("\n[CLI] Netboot -> eMMC programming initiated...\n");
+    netboot_fetch_and_flash_(NETBOOT_MEDIA_EMMC);
+}
+#endif
+
+
 
 
 #if IS_ENABLED(CONFIG_SERVICE_USBDMSC) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
@@ -252,6 +329,8 @@ enum CmdId {
     CMD_FLASHID,
     CMD_FLASHBOOT,
     CMD_NETBOOT,
+    CMD_NETBOOT_SD,
+    CMD_NETBOOT_EMMC,
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -347,7 +426,9 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
-    { CMD_NETBOOT, "NETBOOT", "Download and run payload via TFTP: NETBOOT [server_ip] [filename] [load_addr]", tinyCLI_NetBoot_ },
+    { CMD_NETBOOT_EMMC, "NETBOOT_EMMC", "Download and flash payload to eMMC via TFTP: NETBOOT_EMMC", tinyCLI_NetBootEMMC_ },
+    { CMD_NETBOOT_SD,   "NETBOOT_SD",   "Download and flash payload to SD Card via TFTP: NETBOOT_SD", tinyCLI_NetBootSD_ },
+    { CMD_NETBOOT,      "NETBOOT",      "Download and run payload via TFTP: NETBOOT [server_ip] [filename] [load_addr]", tinyCLI_NetBoot_ },
 #endif
 };
 
@@ -391,7 +472,9 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #endif
 
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
-    { CMD_NETBOOT, true },
+    { CMD_NETBOOT_EMMC, true },
+    { CMD_NETBOOT_SD,   true },
+    { CMD_NETBOOT,      true },
 #endif
 
 
@@ -1215,36 +1298,4 @@ static void tinyCLI_Resume_(void)
     *msip = 1u;
 }
 
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
-#include "services/netboot/netboot_service.h"
 
-#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
-#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
-#endif
-
-#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
-#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
-#endif
-
-static void tinyCLI_NetBoot_(void)
-{
-    mHSS_PRINTF("\n[CLI] Initiating Netboot service...\n");
-
-    size_t bytes_read = 0;
-    /* Passing 0 triggers auto-discovery (DHCP siaddr / Option 66 / Kconfig fallback) */
-    netboot_status_t status = NETBOOT_Service_FetchImage(
-        0,
-        CONFIG_NETBOOT_DEFAULT_FILENAME,
-        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
-        &bytes_read
-    );
-
-    if (status == NETBOOT_STATUS_OK) {
-        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Dispatching harts to 0x%016lx...\n",
-                    (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
-        netboot_jump((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR);
-    } else {
-        mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
-    }
-}
-#endif
