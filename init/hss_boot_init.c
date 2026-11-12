@@ -823,6 +823,31 @@ bool HSS_Storage_ReadBlock(void *pDest, size_t srcOffset, size_t byteCount)
     return result;
 }
 
+static void hss_flush_ddr_cache_(const void *pAddr, size_t byteCount)
+{
+    uintptr_t addr = (uintptr_t)pAddr;
+
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
+
+    /* Flush only cached DDR segments (SEG0_0: 0x80000000..0xBFFFFFFF, SEG0_1: 0x1000000000..0x13FFFFFFFF) */
+    bool is_cached_ddr = ((addr >= 0x80000000ULL && addr < 0xC0000000ULL) ||
+                          (addr >= 0x1000000000ULL && addr < 0x1400000000ULL));
+    if (!is_cached_ddr || byteCount == 0U) {
+        return;
+    }
+
+    /* PolarFire SoC L2 Cache Controller FLUSH64 register writes back and invalidates 64-byte lines */
+    volatile uint64_t *pFlush64 = (volatile uint64_t *)0x02010200UL;
+    uintptr_t start = addr & ~(uintptr_t)63U;
+    uintptr_t end   = (addr + byteCount + 63U) & ~(uintptr_t)63U;
+
+    for (uintptr_t line = start; line < end; line += 64U) {
+        *pFlush64 = (uint64_t)line;
+    }
+
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
+}
+
 bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
 {
     bool result = true;
@@ -831,6 +856,7 @@ bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
     assert(pStorage);
 
     if (pStorage->writeBlock) {
+        hss_flush_ddr_cache_(pSrc, byteCount);
         result = pStorage->writeBlock(dstOffset, pSrc, byteCount);
     }
     return result;

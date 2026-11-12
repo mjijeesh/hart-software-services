@@ -109,6 +109,7 @@ static void uart_send_reply_(char reply)
 #if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI)
 extern struct HSS_Storage *HSS_BootGetActiveStorage(void);
 
+
 static bool serialboot_write_block_storage_(serialboot_target_t target,
                                             uintptr_t ddr_addr,
                                             size_t byte_count)

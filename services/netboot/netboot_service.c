@@ -804,6 +804,8 @@ extern void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint
 extern void HSS_Storage_FlushWriteBuffer(void);
 #endif
 
+
+
 bool NETBOOT_WritePayloadToStorage(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media)
 {
 #if IS_ENABLED(CONFIG_SERVICE_BOOT) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
