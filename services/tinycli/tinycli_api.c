@@ -1315,10 +1315,14 @@ static void display_help_(struct tinycli_cmd const * const pCmds, size_t arraySi
         if ((level == 0u) && (toplevelCmdsSafeAfterBootFlags[i].warnIfPostInit)) {
             HSS_Debug_Highlight(HSS_DEBUG_LOG_WARN);
         }
-        mHSS_PUTS(pCmds[i].name);
+        
+        /* Print the command name padded to 14 characters for clean alignment */
+        mHSS_PRINTF("  %-14s", pCmds[i].name);
+        
         HSS_Debug_Highlight(HSS_DEBUG_LOG_NORMAL);
-        mHSS_PUTC(' ');
-        //mHSS_PRINTF(" - %s\n", pCmds[i].helpString);
+        
+        /* Print the detailed help string on the same line */
+        mHSS_PRINTF(" - %s\n", pCmds[i].helpString);
     }
 
     mHSS_PUTS("\n");
