@@ -1365,3 +1365,101 @@ bool HSS_Boot_SBISetupRequest(enum HSSHartId target, uint32_t *indexOut)
 
     return result;
 }
+
+/*
+ *  HSS Boot Image Format Detectio nand Loading via Netboot or serial boot.
+  These are used for netboot and serial boot, where the boot image is loaded into DDR and then the U54 harts are dispatched to the entry point. The boot image can be a structured HSS Boot Image or a raw flat binary. The code verifies the magic number of the boot image, relocates or decompresses it if necessary, and then registers the boot image and dispatches the U54 harts. If no HSS header magic is found, it treats the image as a raw binary and jumps the U54 harts directly to the specified address.
+
+*/
+
+static void boot_print_payload_chunks_(const struct HSS_BootImage *pImg)
+{
+    mHSS_PRINTF("[PAYLOAD] Set Name : \"%s\"\n", pImg->set_name);
+    mHSS_PRINTF("[PAYLOAD] Image Len: %lu bytes\n", (unsigned long)pImg->bootImageLength);
+
+    if (pImg->chunkTableOffset == 0U) {
+        return;
+    }
+
+    const struct HSS_BootChunkDesc *pChunk =
+        (const struct HSS_BootChunkDesc *)((uintptr_t)pImg + pImg->chunkTableOffset);
+
+    size_t idx = 0U;
+    while (pChunk->size != 0U) {
+        mHSS_PRINTF("[PAYLOAD]   Chunk[%lu]: Hart=%d  Load=0x%010lx  Exec=0x%010lx  Size=%lu bytes\n",
+                    (unsigned long)idx,
+                    (int)pChunk->owner,
+                    (unsigned long)pChunk->loadAddr,
+                    (unsigned long)pChunk->execAddr,
+                    (unsigned long)pChunk->size);
+        pChunk++;
+        idx++;
+    }
+}
+
+static void boot_jump_raw_u54_(uintptr_t entry_addr)
+{
+    mHSS_PRINTF("[BOOT] Flushing caches and dispatching U54 harts to 0x%010lx...\n",
+                (unsigned long)entry_addr);
+
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
+    __asm__ __volatile__("fence.i" ::: "memory");
+
+    for (enum HSSHartId hartid = HSS_HART_U54_1; hartid <= HSS_HART_U54_4; hartid++) {
+        (void)IPI_Send(hartid, IPI_MSG_GOTO, 0U, PRV_M, (void const *)entry_addr, NULL);
+    }
+}
+
+bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count)
+{
+    struct HSS_BootImage *pImg = (struct HSS_BootImage *)ddr_addr;
+
+    /* 1. Structured HSS Boot Image (0xb007c0de or compressed 0xc08b8355) */
+    if (HSS_Boot_VerifyMagic(pImg)) {
+        mHSS_PRINTF("[PAYLOAD] Detected HSS Boot Image header (magic: 0x%08x).\n", pImg->magic);
+
+        /*
+         * Relocate (or decompress) the HSS_BootImage container to DDR-Hi (256 MiB offset,
+         * valid on both 1 GiB Discovery Kit and 2 GiB Icicle Kit) so unpacking chunks to
+         * 0x80000000 does not overwrite the chunk table while HSS_BootHarts() runs.
+         */
+        uintptr_t safe_container_addr = 0x1010000000ULL;
+        struct HSS_BootImage *pStagedImg = (struct HSS_BootImage *)safe_container_addr;
+
+        if (pImg->magic == mHSS_COMPRESSED_MAGIC) {
+#if IS_ENABLED(CONFIG_COMPRESSION)
+            mHSS_PRINTF("[PAYLOAD] Decompressing payload to 0x%010lx...\n",
+                        (unsigned long)safe_container_addr);
+            HSS_Decompress((void *)pImg, (void *)pStagedImg);
+            if (pStagedImg->magic != mHSS_BOOT_MAGIC) {
+                mHSS_PRINTF("[PAYLOAD] ERROR: Decompressed header magic invalid (0x%08x)!\n",
+                            pStagedImg->magic);
+                return false;
+            }
+#else
+            mHSS_PRINTF("[PAYLOAD] ERROR: Compressed image received but CONFIG_COMPRESSION is disabled.\n");
+            return false;
+#endif
+        } else {
+            size_t copy_len = (pImg->bootImageLength > byte_count)
+                              ? (size_t)pImg->bootImageLength
+                              : byte_count;
+            if (ddr_addr != safe_container_addr) {
+                memcpy((void *)pStagedImg, (const void *)pImg, copy_len);
+            }
+        }
+
+        boot_print_payload_chunks_(pStagedImg);
+
+        mHSS_PRINTF("[PAYLOAD] Registering boot image and dispatching U54 harts...\n");
+        HSS_Register_Boot_Image(pStagedImg);
+        HSS_BootHarts();
+        return true;
+    }
+
+    /* 2. Raw flat binary without HSS header -> jump U54 harts directly to ddr_addr */
+    mHSS_PRINTF("[PAYLOAD] No HSS header magic found; treating as raw binary @ 0x%010lx.\n",
+                (unsigned long)ddr_addr);
+    boot_jump_raw_u54_(ddr_addr);
+    return true;
+}

@@ -78,6 +78,9 @@ extern struct StateMachine boot_service2;
 extern struct StateMachine boot_service3;
 extern struct StateMachine boot_service4;
 
+/* Auto-detects HSS_BootImage (0xb007c0de / compressed) vs raw flat binary and boots U54s */
+bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count);
+
 #ifdef __cplusplus
 }
 #endif

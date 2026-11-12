@@ -46,3 +46,13 @@ bool HSS_UARTInit(void)
 
     return true;
 }
+
+
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#include "services/serialboot/serialboot.h"
+
+void bsp_serialboot_uart_tx(const uint8_t *data, size_t len)
+{
+    MSS_UART_polled_tx(&g_mss_uart0_lo, data, (uint32_t)len);
+}
+#endif

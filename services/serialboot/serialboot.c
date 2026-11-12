@@ -60,6 +60,20 @@
 #define SFL_ACK_UNKNOWN     'U'
 #define SFL_ACK_ERROR       'E'
 
+
+#include "drivers/mss/mss_mmuart/mss_uart.h"
+
+__attribute__((weak)) void bsp_serialboot_uart_tx(const uint8_t *data, size_t len)
+{
+    MSS_UART_polled_tx(&g_mss_uart0_lo, data, (uint32_t)len);
+}
+
+static void uart_send_raw_bytes_(const void *data, size_t len)
+{
+    bsp_serialboot_uart_tx((const uint8_t *)data, len);
+}
+
+
 static uint16_t sfl_crc16_(const uint8_t *buf, size_t len)
 {
     uint16_t crc = 0x0000U;
@@ -85,107 +99,11 @@ static uint8_t uart_read_byte_blocking_(void)
     return ch;
 }
 
-static void uart_send_raw_bytes_(const void *data, size_t len)
-{
-    MSS_UART_polled_tx(&g_mss_uart0_lo, (const uint8_t *)data, (uint32_t)len);
-}
 
 static void uart_send_reply_(char reply)
 {
     uint8_t ch = (uint8_t)reply;
     uart_send_raw_bytes_(&ch, 1U);
-}
-
-static void serialboot_print_payload_chunks_(const struct HSS_BootImage *pImg)
-{
-    mHSS_PRINTF("[PAYLOAD] Set Name : \"%s\"\n", pImg->set_name);
-    mHSS_PRINTF("[PAYLOAD] Image Len: %lu bytes\n", (unsigned long)pImg->bootImageLength);
-
-    if (pImg->chunkTableOffset == 0U) {
-        return;
-    }
-
-    const struct HSS_BootChunkDesc *pChunk =
-        (const struct HSS_BootChunkDesc *)((uintptr_t)pImg + pImg->chunkTableOffset);
-
-    size_t idx = 0U;
-    while (pChunk->size != 0U) {
-        mHSS_PRINTF("[PAYLOAD]   Chunk[%lu]: Hart=%d  Load=0x%010lx  Exec=0x%010lx  Size=%lu bytes\n",
-                    (unsigned long)idx,
-                    (int)pChunk->owner,
-                    (unsigned long)pChunk->loadAddr,
-                    (unsigned long)pChunk->execAddr,
-                    (unsigned long)pChunk->size);
-        pChunk++;
-        idx++;
-    }
-}
-
-static void serialboot_jump_raw_u54_(uintptr_t entry_addr)
-{
-    mHSS_PRINTF("[SERIALBOOT] Flushing caches and dispatching U54 harts to 0x%010lx...\n",
-                (unsigned long)entry_addr);
-
-    __asm__ __volatile__("fence rw, rw" ::: "memory");
-    __asm__ __volatile__("fence.i" ::: "memory");
-
-    for (enum HSSHartId hartid = HSS_HART_U54_1; hartid <= HSS_HART_U54_4; hartid++) {
-        (void)IPI_Send(hartid, IPI_MSG_GOTO, 0U, PRV_M, (void const *)entry_addr, NULL);
-    }
-}
-
-bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count)
-{
-    struct HSS_BootImage *pImg = (struct HSS_BootImage *)ddr_addr;
-
-    /* 1. Structured HSS Boot Image (0xb007c0de or compressed 0xc08b8355) */
-    if (HSS_Boot_VerifyMagic(pImg)) {
-        mHSS_PRINTF("[PAYLOAD] Detected HSS Boot Image header (magic: 0x%08x).\n", pImg->magic);
-
-        /*
-         * Relocate (or decompress) the HSS_BootImage container to upper cached DDR
-         * (0x103fc00000) so unpacking chunks into 0x80000000 does not overwrite the
-         * chunk descriptor table while HSS_BootHarts() copies segments.
-         */
-        uintptr_t safe_container_addr = (uintptr_t)CONFIG_SERVICE_BOOT_DDR_TARGET_ADDR;
-        struct HSS_BootImage *pStagedImg = (struct HSS_BootImage *)safe_container_addr;
-
-        if (pImg->magic == mHSS_COMPRESSED_MAGIC) {
-#if IS_ENABLED(CONFIG_COMPRESSION)
-            mHSS_PRINTF("[PAYLOAD] Decompressing payload to 0x%010lx...\n",
-                        (unsigned long)safe_container_addr);
-            HSS_Decompress((void *)pImg, (void *)pStagedImg);
-            if (pStagedImg->magic != mHSS_BOOT_MAGIC) {
-                mHSS_PRINTF("[PAYLOAD] ERROR: Decompressed header magic invalid (0x%08x)!\n",
-                            pStagedImg->magic);
-                return false;
-            }
-#else
-            mHSS_PRINTF("[PAYLOAD] ERROR: Compressed image received but CONFIG_COMPRESSION is disabled.\n");
-            return false;
-#endif
-        } else {
-            size_t copy_len = (pImg->bootImageLength > byte_count)
-                              ? (size_t)pImg->bootImageLength
-                              : byte_count;
-            if (ddr_addr != safe_container_addr) {
-                memcpy((void *)pStagedImg, (const void *)pImg, copy_len);
-            }
-        }
-
-        serialboot_print_payload_chunks_(pStagedImg);
-
-        mHSS_PRINTF("[PAYLOAD] Registering boot image and dispatching U54 harts...\n");
-        HSS_Register_Boot_Image(pStagedImg);
-        HSS_BootHarts();
-        return true;
-    }
-
-    /* 2. Raw flat binary without HSS header -> jump U54 harts directly to ddr_addr */
-    mHSS_PRINTF("[PAYLOAD] No HSS header magic found; treating as raw binary @ 0x%010lx.\n",
-                (unsigned long)ddr_addr);
-    serialboot_jump_raw_u54_(ddr_addr);
-    return true;
 }
 
 #if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI)

@@ -566,10 +566,10 @@ static void tinyCLI_NetBoot_(void)
         &bytes_read
     );
 
-    if (status == NETBOOT_STATUS_OK) {
-        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Dispatching harts to 0x%016lx...\n",
+   if (status == NETBOOT_STATUS_OK) {
+        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Decoding/booting from 0x%016lx...\n",
                     (unsigned long)bytes_read, (unsigned long)load_addr);
-        netboot_jump(load_addr);
+        (void)HSS_Boot_DecodeAndBootDDR(load_addr, bytes_read);
     } else {
         mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
     }
