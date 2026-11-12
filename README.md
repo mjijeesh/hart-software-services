@@ -1,4 +1,226 @@
-# Added NETBOOT into the auto booting sequence
+# **Automated Network Boot & Non-Volatile Storage Flashing (HSS)**
+
+This extension adds a tiered, fault-tolerant boot cascade and network-based non-volatile storage programming to Microchip PolarFire SoC Hart Software Services (HSS). On reset, HSS automatically probes local storage media in priority order and falls back to TFTP network staging if no valid boot image is found. From the TinyCLI prompt, developers can also download packaged payloads over TFTP and flash them directly to **eMMC**, **SD Card**, **SPI Flash (CoreSPI)**, or **QSPI Flash**.
+
+## **1\. Automated Boot Cascade Architecture**
+
+When HSS boots without a manual CLI override, HSS\_BootInit() evaluates boot media sequentially and falls back to Ethernet TFTP staging if all local media fail:
+
+Plaintext  
+\[Power-On / Cold Reset\]  
+         │  
+         ▼  
+┌─────────────────────────────────────────┐  
+│ 1\. Local MMC (SD Card / eMMC)           │  
+│    Checks GPT boot partition or LBA 0   │──(Valid 0xb007c0de)──► Stage to DDR & Boot U54s  
+└────────┬────────────────────────────────┘  
+         │ (No media / Invalid magic)  
+         ▼  
+┌─────────────────────────────────────────┐  
+│ 2\. Onboard SPI Flash (+0x400)           │  
+│    Reads via System Controller SPI      │──(Valid 0xb007c0de)──► Stage to DDR & Boot U54s  
+└────────┬────────────────────────────────┘  
+         │ (Erased / Invalid magic)  
+         ▼  
+┌─────────────────────────────────────────┐  
+│ 3\. Automatic Netboot Fallback (TFTP)    │  
+│    DHCP Lease ─► ARP ─► TFTP Download   │──(Transfer OK)───────► Stage to DDR & Boot U54s  
+└─────────────────────────────────────────┘
+
+> * **Media Priority:** pStorages\[\] prioritizes \&mmcStorage\_ before \&spiStorage\_, ensuring updates flashed to eMMC or SD card take precedence over factory/backup images in SPI flash.  
+> * **Header Validation:** Every local storage stage validates the 0xb007c0de (or compressed 0xc08b8355) HSS boot image magic before copying the payload into DDR (CONFIG\_SERVICE\_BOOT\_DDR\_TARGET\_ADDR).  
+> * **Zero-Touch Network Recovery:** If local media are unprogrammed or corrupted, HSS\_BootInit() triggers NETBOOT\_Service\_FetchImage() to acquire a DHCP lease, resolve the TFTP server (via DHCP Option 66, siaddr, or Kconfig default), download boot.bin to 0x80000000, and dispatch U54 harts u54\_1 through u54\_4.
+
+## **2\. Payload Preparation Requirements**
+
+> * **Direct DDR Execution (netboot):** Accepts either a raw binary (linked at 0x80000000) or an hss-payload-generator image.  
+> * **Persistent Storage Flashing (netboot sd, netboot emmc, netboot spi, netboot qspi):** Requires an image packaged with hss-payload-generator containing the 0xb007c0de magic header and hart entry-point metadata. All storage programming commands verify this magic header in DDR prior to erasing or writing flash.
+
+Generate a compatible payload image (boot.bin) and place it in your TFTP server root (e.g., /srv/tftp/boot.bin):
+
+Bash  
+./tools/hss-payload-generator/hss-payload-generator \-c app\_config.yaml /srv/tftp/boot.bin
+
+## **3\. TinyCLI Command Reference & Expected Results**
+
+All network boot and flashing operations are unified under the top-level NETBOOT command:
+
+| Command | Target Media | Description |
+| :---- | :---- | :---- |
+| netboot \[ip\] \[file\] \[addr\] | DDR RAM | Downloads payload via TFTP to DDR (0x80000000) and immediately boots U54 cores. |
+| netboot emmc \[ip\] \[file\] | Onboard eMMC | Downloads payload to DDR, verifies header, writes to GPT boot partition (or LBA 0), and verifies read-back. |
+| netboot sd \[ip\] \[file\] | microSD Card | Downloads payload to DDR, verifies header, writes to GPT boot partition (or LBA 0), and verifies read-back. |
+| netboot spi \[ip\] \[file\] \[offset\] | CoreSPI Flash | Downloads payload, preserves 0x000–0x3FF sector prefix, erases 64 KiB blocks, programs at 0x400, and verifies. |
+| netboot qspi \[ip\] \[file\] | MSS QSPI Flash | Downloads and flashes payload to MSS QSPI flash (for boards with populated MSS QSPI devices). |
+
+(All arguments in brackets are optional; omitted parameters default to DHCP auto-discovery / CONFIG\_NETBOOT\_DEFAULT\_SERVER\_IP, boot.bin, DDR 0x80000000, and SPI offset 0x400.)
+
+### **3.1 NETBOOT — Download & Boot Directly in DDR**
+
+**Usage:**
+
+Plaintext  
+netboot  
+netboot 192.168.20.94 custom\_app.bin 0x80000000
+
+**Expected Serial Console Output:**
+
+Plaintext  
+\>\> netboot
+
+\[CLI\] Initiating Netboot service...
+
+\================ \[NETBOOT: HARDWARE INIT\] \================  
+\[NETBOOT\] \[1/5\] Cycling GEM peripheral reset and clock...  
+\[NETBOOT\] \[2/5\] Configuring GEM MAC Core...  
+\[NETBOOT\]       Station MAC Address : 00:04:A3:11:22:34  
+\[NETBOOT\] \[3/5\] Probing Hardware Registers (PHY Addr: 9)...  
+\[NETBOOT\]       PHY ID 1 (Reg 0x02) : 0x0007  
+\[NETBOOT\]       PHY ID 2 (Reg 0x03) : 0x0660  
+\[NETBOOT\] \[4/5\] Priming DMA Descriptor Queues in Polled Mode...  
+\[NETBOOT\] \[5/5\] Waiting for Copper Auto-Negotiation...  
+\[NETBOOT\]       Link State          : UP  
+\[NETBOOT\]       Negotiated Speed    : 1000 Mbps (Gigabit)  
+\[NETBOOT\]       Duplex Mode         : Full Duplex  
+\[NETBOOT\] Allowing switch port to enter forwarding state (3.0s)...  
+\================ \[NETBOOT: DHCP NEGOTIATION\] \================  
+\[DHCP\] Broadcasting DHCP Discover (Attempt 1/6)...  
+\[DHCP\] DHCP Offer Successfully Received\!  
+\[DHCP\]   \|- Assigned Board IP : 192.168.20.76  
+\[DHCP\]   \|- Subnet Mask       : 255.255.255.128  
+\[DHCP\]   \\- Gateway IP        : 192.168.20.1  
+\=============================================================
+
+\[NETBOOT\] Target TFTP Server : 192.168.20.94 (Host Configuration)  
+\[NETBOOT\] Sending ARP Request for 192.168.20.94 (Attempt 1/4)...  
+\[NETBOOT\] Hardware MAC Resolved: 24:41:8C:F1:9B:45  
+\[NETBOOT\] Requesting file 'boot.bin' via TFTP...
+
+\[NETBOOT\] Transfer complete\! Total: 36864 bytes  
+\[NETBOOT\] Quiescing GEM MAC...  
+\[NETBOOT\] MAC released.  
+\[CLI\] Transfer complete (36864 bytes). Dispatching harts to 0x0000000080000000...
+
+\[NETBOOT\] Synchronizing caches and dispatching all U54 harts to 0x0000000080000000...  
+\[NETBOOT\] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).  
+\[NETBOOT\] Returning to HSS TinyCLI.
+
+### **3.2 NETBOOT EMMC & NETBOOT SD — Program eMMC or SD Card**
+
+**Hardware Note (PolarFire SoC Icicle Kit):** Verify jumpers **J34/J43** match your selected target voltage/muxing before flashing.  
+**Usage:**
+
+Plaintext  
+netboot emmc  
+netboot sd 192.168.20.94 boot.bin
+
+**Behavior:**
+
+> 1. Stages the TFTP payload into DDR at 0x80000000.  
+> 2. Verifies HSS\_Boot\_VerifyMagic() (0xb007c0de).  
+> 3. Checks for a valid GPT header (GPT\_ReadHeader()): if a boot partition exists, writes to its starting LBA offset; otherwise writes raw starting at LBA 0\.  
+> 4. Pads the transfer to a 512-byte block boundary, writes blocks, flushes buffers, and reads back the header to confirm flash integrity.
+
+**Expected Serial Console Output:**
+
+Plaintext  
+\>\> netboot emmc
+
+\[CLI\] Netboot \-\> eMMC programming initiated...  
+...  
+\[NETBOOT\] Transfer complete\! Total: 36864 bytes  
+\[NETBOOT\] Quiescing GEM MAC...  
+\[NETBOOT\] MAC released.  
+\[CLI\] Downloaded 36864 bytes to 0x80000000. Programming storage...  
+\[FLASH\] Selecting eMMC interface...  
+\[FLASH\] No GPT header found; writing to raw offset 0x0.  
+\[FLASH\] Writing 36864 bytes (aligned: 36864\) to eMMC offset 0x0...  
+\[FLASH\] SUCCESS: Payload verified on eMMC\! Reset board to boot.
+
+### **3.3 NETBOOT SPI — Program Onboard SPI Flash via CoreSPI**
+
+On the PolarFire SoC Icicle Kit, the onboard Micron MT25Q SPI flash is accessed for programming through the FPGA fabric **CoreSPI** controller (spi\_flash.c) and booted by the System Controller from offset 0x400.  
+**Usage:**
+
+Plaintext  
+netboot spi  
+netboot spi 192.168.20.94 boot.bin 0x400
+
+**Behavior:**
+
+> 1. Downloads boot.bin to DDR (0x80000000) and validates the 0xb007c0de magic header.  
+> 2. Initializes CoreSPI (spi\_flash\_init()), reads the JEDEC ID, enables 4-byte addressing, and unlocks global block protection.  
+> 3. **Header Preservation:** Because spi\_flash\_erase\_range() erases in 64 KiB (0x10000) sectors, any existing prefix bytes between 0x00000 and spi\_offset (0x000–0x3FF) are backed up to DDR before erasing and restored immediately afterward.  
+> 4. Programs the payload in 256-byte pages (spi\_flash\_program()) and reads back struct HSS\_BootImage to verify integrity.
+
+**Expected Serial Console Output:**
+
+Plaintext  
+\>\> netboot spi
+
+\[CLI\] Netboot \-\> SPI Flash (offset 0x400) programming initiated...  
+...  
+\[NETBOOT\] Transfer complete\! Total: 36864 bytes  
+\[NETBOOT\] Quiescing GEM MAC...  
+\[NETBOOT\] MAC released.  
+\[SPI-FLASH\] Detected Micron MT25Q (MFR: 0x20, DEV: 0xBB21)  
+\[SPI-FLASH\] Backing up 1024 prefix bytes at 0x0...  
+\[SPI-FLASH\] Erasing 64 KiB sectors covering 0x400 (36864 bytes)...  
+\[SPI-FLASH\] Programming 36864 bytes to 0x400...  
+\[SPI-FLASH\] SUCCESS: Payload verified in SPI Flash @ 0x400\! Reset board to boot.
+
+### **3.4 NETBOOT QSPI — Program MSS QSPI Flash**
+
+Available when CONFIG\_SERVICE\_QSPI=y is enabled on boards that populate the dedicated MSS QSPI pins (such as the PolarFire SoC Discovery Kit). *(Disabled on the Icicle Kit, where MSS QSPI is unpopulated and returns JEDEC 0xFFFFFF.)*  
+**Usage:**
+
+Plaintext  
+netboot qspi  
+netboot qspi 192.168.20.94 boot.bin
+
+## **4\. Summary of Codebase Modifications**
+
+> * **init/hss\_boot\_init.c**  
+  * Reordered pStorages\[\] so \&mmcStorage\_ is evaluated before \&spiStorage\_, making SD/eMMC the primary boot device with SPI Flash as secondary.  
+  * Added an automatic Netboot fallback block at the end of HSS\_BootInit() that invokes NETBOOT\_Service\_FetchImage() and netboot\_jump() whenever all local storage providers return false.  
+> * **services/netboot/netboot\_service.h & services/netboot/netboot\_service.c**  
+  * Added netboot\_media\_t (NETBOOT\_MEDIA\_SDCARD, NETBOOT\_MEDIA\_EMMC, NETBOOT\_MEDIA\_QSPI) and exported NETBOOT\_ParseIP().  
+  * Implemented NETBOOT\_WritePayloadToStorage() to validate the HSS\_BootImage magic header, initialize the target storage provider, resolve GPT boot partition LBA offsets (with LBA 0 fallback), write block-aligned data, flush write buffers, and verify read-back integrity.  
+  * Configured GEM MAC initialization to support cross-MAC MDIO routing for asymmetric PHY topologies (e.g., Icicle Kit J1/J2 VSC8662 PHY).  
+> * **services/tinycli/tinycli\_api.c**  
+  * Refactored NETBOOT into a hierarchical command using TinyCLI's dispatch\_command\_() and netbootCmds\[\] subcommand table (SD, EMMC, SPI, QSPI), eliminating command-prefix shadowing.  
+  * Added netboot\_parse\_optional\_args\_() to support optional \[server\_ip\], \[filename\], and \[load\_addr/offset\] parameters across all subcommands.  
+  * Implemented tinyCLI\_NetBoot\_SPI\_() with 64 KiB sector-prefix backup/restore and read-back verification on top of services/serialboot/spi\_flash.c.
+
+## **5\. Build & Kconfig Configuration**
+
+Ensure the following options are configured in .config (or via make BOARD=mpfs-icicle-kit menuconfig):
+
+Code snippet  
+\# Boot & Storage Providers  
+CONFIG\_SERVICE\_BOOT=y  
+CONFIG\_SERVICE\_MMC=y  
+CONFIG\_SERVICE\_BOOT\_MMC\_USE\_GPT=y  
+CONFIG\_SERVICE\_SPI=y  
+CONFIG\_SERVICE\_BOOT\_SPI\_FLASH\_OFFSET=0x00000400  
+CONFIG\_SERVICE\_BOOT\_DDR\_TARGET\_ADDR=0x80000000
+
+\# Network Boot & CoreSPI Flash Programming  
+CONFIG\_SERVICE\_NETBOOT=y  
+CONFIG\_NETBOOT\_DEFAULT\_SERVER\_IP="192.168.20.94"  
+CONFIG\_NETBOOT\_DEFAULT\_FILENAME="boot.bin"  
+CONFIG\_NETBOOT\_DDR\_DEST\_ADDR=0x80000000  
+CONFIG\_SERVICE\_SERIALBOOT=y
+
+\# Disable unused MSS QSPI and embedded eNVM payload on Icicle Kit  
+\# CONFIG\_SERVICE\_QSPI is not set  
+\# CONFIG\_SERVICE\_BOOT\_USE\_PAYLOAD is not set
+
+Build and program HSS onto the board:
+
+Bash  
+make BOARD=mpfs-icicle-kit clean all program  
+
 
 
 # HSS Netboot Service 

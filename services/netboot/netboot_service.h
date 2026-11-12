@@ -14,7 +14,8 @@ typedef enum {
 
 typedef enum {
     NETBOOT_MEDIA_SDCARD = 0,
-    NETBOOT_MEDIA_EMMC
+    NETBOOT_MEDIA_EMMC,
+    NETBOOT_MEDIA_QSPI
 } netboot_media_t;
 
 netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
@@ -25,7 +26,8 @@ netboot_status_t NETBOOT_Service_FetchImage(uint32_t server_ip,
 void NETBOOT_Service_Deinit(void);
 void netboot_jump(uintptr_t addr);
 
-/* Writes a staged HSS payload from DDR to SD card or eMMC */
-bool NETBOOT_WritePayloadToMMC(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media);
+uint32_t NETBOOT_ParseIP(const char *str);
+/* Writes a staged HSS payload from DDR to SD Card, eMMC, or QSPI Flash */
+bool NETBOOT_WritePayloadToStorage(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media);
 
 #endif /* NETBOOT_SERVICE_H */
