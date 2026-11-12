@@ -1,19 +1,21 @@
-#ifndef SERIALBOOT_H
-#define SERIALBOOT_H
+#ifndef HSS_SERIALBOOT_H
+#define HSS_SERIALBOOT_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "hss_types.h"
 
-#include <stdint.h>
-#include <stddef.h>
+typedef enum {
+    SERIALBOOT_TARGET_DDR = 0,
+    SERIALBOOT_TARGET_SPI,
+    SERIALBOOT_TARGET_EMMC,
+    SERIALBOOT_TARGET_SDCARD,
+    SERIALBOOT_TARGET_QSPI
+} serialboot_target_t;
 
-int do_serialboot(void);
-void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size);
+int do_serialboot(serialboot_target_t target, uintptr_t addr_or_offset);
 void do_flash_read_id(void);
 void do_flashboot(uint32_t spi_offset);
-#ifdef __cplusplus
-}
-#endif
 
-#endif
+/* Auto-detects HSS_BootImage (0xb007c0de / compressed) vs raw flat binary and boots U54s */
+bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count);
+
+#endif /* HSS_SERIALBOOT_H */

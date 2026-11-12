@@ -1,82 +1,73 @@
-#ifndef asm
-#define asm __asm__
-#endif
+/*
+ * MPFS HSS Embedded Software - Serial Boot & Multi-Media Flash Loader
+ *
+ * Compatible with mpfs-terminal.py SFL protocol:
+ *   - Magic Req : "sL5DdSMmkekro\n" (14 bytes)
+ *   - Magic Ack : "z6IHG7cYDID6o\n" (14 bytes)
+ *   - Replies   : 'K' (success), 'C' (CRC error), 'U' (unknown), 'E' (error)
+ *   - Commands  : ABORT (0x00), LOAD (0x01), JUMP (0x02), FLASH (0x03), DONE (0x04)
+ */
 
 #include "config.h"
 #include "hss_types.h"
 #include "hss_debug.h"
 #include <string.h>
 
-#include "sfl.h"
+#include "sbi/riscv_encoding.h"
+#include "drivers/mss/mss_mmuart/mss_uart.h"
 #include "serialboot.h"
-#include "spi_flash.h"
-#include "mss_uart.h"
-#include "ssmb_ipi.h"
+#include "hss_boot_service.h"
+#include "hss_boot_init.h"
+#include "gpt.h"
+#include "uart_helper.h"
+
+#if IS_ENABLED(CONFIG_COMPRESSION)
+#include "hss_decompress.h"
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#include "services/spi/spi_flash.h"
+#endif
 
 #ifndef PRV_M
-#define PRV_M 3
+#define PRV_M 3U
 #endif
 
-#define MAX_FAILURES 256
-#define SYS_CYCLE_PER_SEC 600000000UL
-#define FLASH_DEFAULT_ADDR 0x00100000UL
-
-/* SFL Extended Protocol Opcodes */
-#ifndef SFL_CMD_FLASH
-#define SFL_CMD_FLASH 0x04
-#endif
-#ifndef SFL_CMD_DONE
-#define SFL_CMD_DONE  0x05
+#ifndef CONFIG_SERVICE_BOOT_DDR_TARGET_ADDR
+#define CONFIG_SERVICE_BOOT_DDR_TARGET_ADDR 0x103fc00000ULL
 #endif
 
-/* Low-level UART hooks: Select index 1 for Discovery Kit (MMUART1), 0 for Icicle Kit (MMUART0) */
-#ifndef SERIALBOOT_UART_INDEX
-#if defined(CONFIG_BOARD_MPFS_DISCO_KIT) || defined(CONFIG_BOARD_MPFS_DISCOVERY_KIT)
-#define SERIALBOOT_UART_INDEX 1
-#else
-#define SERIALBOOT_UART_INDEX 0
-#endif
+#ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
+#define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
 #endif
 
-extern mss_uart_instance_t * const pUartDeviceList[];
-#define CONSOLE_UART (pUartDeviceList[SERIALBOOT_UART_INDEX])
+#define SERIALBOOT_DEFAULT_DDR_ADDR 0x80000000UL
+#define SERIALBOOT_MAX_PAYLOAD_SIZE (64UL * 1024UL * 1024UL) /* 64 MiB safety limit */
 
-static inline bool uart_read_nonblock(uint8_t *ch)
+/* SFL Protocol Constants matching mpfs-terminal.py */
+#define SFL_MAGIC_LEN       14U
+#define SFL_MAGIC_REQ       "sL5DdSMmkekro\n"
+#define SFL_MAGIC_ACK       "z6IHG7cYDID6o\n"
+
+#define SFL_CMD_ABORT       0x00U
+#define SFL_CMD_LOAD        0x01U
+#define SFL_CMD_JUMP        0x02U
+#define SFL_CMD_FLASH       0x03U
+#define SFL_CMD_DONE        0x04U
+
+#define SFL_ACK_SUCCESS     'K'
+#define SFL_ACK_CRCERROR    'C'
+#define SFL_ACK_UNKNOWN     'U'
+#define SFL_ACK_ERROR       'E'
+
+static uint16_t sfl_crc16_(const uint8_t *buf, size_t len)
 {
-    return (MSS_UART_get_rx(CONSOLE_UART, ch, 1) > 0);
-}
-
-static inline void uart_write_byte(uint8_t ch)
-{
-    MSS_UART_polled_tx(CONSOLE_UART, &ch, 1);
-}
-
-static inline void uart_write_str(const char *str)
-{
-    MSS_UART_polled_tx_string(CONSOLE_UART, (const uint8_t *)str);
-}
-
-
-
-static TxId_t g_serialboot_txid = 1u;
-
-static inline uint64_t get_cycles(void)
-{
-    uint64_t c;
-    __asm__ __volatile__("rdcycle %0" : "=r"(c));
-    return c;
-}
-
-
-
-static uint16_t sfl_crc16(const unsigned char *buffer, size_t len)
-{
-    uint16_t crc = 0;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)buffer[i] << 8;
-        for (int j = 0; j < 8; j++) {
-            if (crc & 0x8000) {
-                crc = (crc << 1) ^ 0x1021;
+    uint16_t crc = 0x0000U;
+    for (size_t i = 0U; i < len; i++) {
+        crc ^= (uint16_t)buf[i] << 8;
+        for (uint8_t bit = 0U; bit < 8U; bit++) {
+            if (crc & 0x8000U) {
+                crc = (uint16_t)((crc << 1) ^ 0x1021U);
             } else {
                 crc <<= 1;
             }
@@ -85,366 +76,473 @@ static uint16_t sfl_crc16(const unsigned char *buffer, size_t len)
     return crc;
 }
 
-static inline bool is_valid_ram_addr(uintptr_t addr)
+static uint8_t uart_read_byte_blocking_(void)
 {
-    /* LIM Scratchpad (0x08000000 - 0x08200000) */
-    if (addr >= 0x08000000UL && addr < 0x08200000UL) return true;
-
-    /* DDR Cached (0x80000000 - 0xC0000000) */
-    if (addr >= 0x80000000UL && addr < 0xC0000000UL) return true;
-
-    /* DDR Non-Cached (0xC0000000 - 0xE0000000) */
-    if (addr >= 0xC0000000UL && addr < 0xE0000000UL) return true;
-
-    return false;
-}
-
-static int boot_load_max_size(uintptr_t addr, size_t *max_size)
-{
-    if (addr >= 0x08000000UL && addr < 0x08200000UL) {
-        *max_size = 0x08200000UL - addr;
-        return 1;
+    uint8_t ch = 0U;
+    while (!uart_getchar(&ch, -1, false)) {
+        /* Wait for next byte */
     }
-    if (addr >= 0x80000000UL && addr < 0xC0000000UL) {
-        *max_size = 0xC0000000UL - addr;
-        return 1;
+    return ch;
+}
+
+static void uart_send_raw_bytes_(const void *data, size_t len)
+{
+    MSS_UART_polled_tx(&g_mss_uart0_lo, (const uint8_t *)data, (uint32_t)len);
+}
+
+static void uart_send_reply_(char reply)
+{
+    uint8_t ch = (uint8_t)reply;
+    uart_send_raw_bytes_(&ch, 1U);
+}
+
+static void serialboot_print_payload_chunks_(const struct HSS_BootImage *pImg)
+{
+    mHSS_PRINTF("[PAYLOAD] Set Name : \"%s\"\n", pImg->set_name);
+    mHSS_PRINTF("[PAYLOAD] Image Len: %lu bytes\n", (unsigned long)pImg->bootImageLength);
+
+    if (pImg->chunkTableOffset == 0U) {
+        return;
     }
-    if (addr >= 0xC0000000UL && addr < 0xE0000000UL) {
-        *max_size = 0xE0000000UL - addr;
-        return 1;
+
+    const struct HSS_BootChunkDesc *pChunk =
+        (const struct HSS_BootChunkDesc *)((uintptr_t)pImg + pImg->chunkTableOffset);
+
+    size_t idx = 0U;
+    while (pChunk->size != 0U) {
+        mHSS_PRINTF("[PAYLOAD]   Chunk[%lu]: Hart=%d  Load=0x%010lx  Exec=0x%010lx  Size=%lu bytes\n",
+                    (unsigned long)idx,
+                    (int)pChunk->owner,
+                    (unsigned long)pChunk->loadAddr,
+                    (unsigned long)pChunk->execAddr,
+                    (unsigned long)pChunk->size);
+        pChunk++;
+        idx++;
     }
-    mHSS_PRINTF("Error: Address 0x%08lx outside permissible RAM\n", addr);
-    return 0;
 }
 
-static uint32_t get_uint32(const unsigned char *data)
+static void serialboot_jump_raw_u54_(uintptr_t entry_addr)
 {
-    return ((uint32_t)data[0] << 24) |
-           ((uint32_t)data[1] << 16) |
-           ((uint32_t)data[2] << 8)  |
-            (uint32_t)data[3];
-}
-
-static inline uint32_t get_uint32_le(const unsigned char *data)
-{
-    return ((uint32_t)data[0])       |
-           ((uint32_t)data[1] << 8)  |
-           ((uint32_t)data[2] << 16) |
-           ((uint32_t)data[3] << 24);
-}
-
-static void serialboot_jump(uintptr_t addr)
-{
-    mHSS_PRINTF("\n[SERIALBOOT] Synchronizing caches and dispatching all U54 harts to 0x%016lx...\n", addr);
+    mHSS_PRINTF("[SERIALBOOT] Flushing caches and dispatching U54 harts to 0x%010lx...\n",
+                (unsigned long)entry_addr);
 
     __asm__ __volatile__("fence rw, rw" ::: "memory");
     __asm__ __volatile__("fence.i" ::: "memory");
 
-    for (enum HSSHartId hart = HSS_HART_U54_1; hart <= HSS_HART_U54_4; hart++) {
-        IPI_Send(hart,
-                 IPI_MSG_GOTO,
-                 g_serialboot_txid++,
-                 PRV_M,
-                 (void *)addr,
-                 NULL);
+    for (enum HSSHartId hartid = HSS_HART_U54_1; hartid <= HSS_HART_U54_4; hartid++) {
+        (void)IPI_Send(hartid, IPI_MSG_GOTO, 0U, PRV_M, (void const *)entry_addr, NULL);
     }
-
-    for (volatile int i = 0; i < 200000; i++);
-
-    mHSS_PRINTF("[SERIALBOOT] All U54 harts launched. Application active on UART1 (/dev/ttyUSB1).\n");
-    mHSS_PRINTF("[SERIALBOOT] Returning to HSS TinyCLI.\n\n");
-    
-    
-    /* Enable the below section if we want to disable the hss after the Application code start running */   
-
-    /*  Wait for U54 harts to wake and take control */
-    /* This is a temporary delay to allow the U54 harts to start executing the application code.
-     *  In a real-world scenario, you would want to implement a more robust synchronization mechanism
-     *  to ensure that the U54 harts have successfully started before parking the HSS monitor hart.
-     */
-    //for (volatile int i = 0; i < 200000; i++);
-
-    //mHSS_PRINTF("[SERIALBOOT] All U54 harts launched. Parking HSS Monitor Hart.\n\n");
-
-    /* Disable interrupts on Hart 0 so timer tick messages stop */
-    //__asm__ __volatile__("csrci mstatus, 8");
-
-    /* Park Hart 0 (E51) permanently so it never returns to TinyCLI */
-    //while (1) {
-    //    __asm__ __volatile__("wfi");
-    //}
-
 }
 
-static int check_ack(void)
+bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count)
 {
-    int recognized = 0;
-    static const char ack_str[SFL_MAGIC_LEN] = SFL_MAGIC_ACK;
-    //uint64_t timeout_cycles = SYS_CYCLE_PER_SEC / 4;
-    /* 2 full seconds timeout for host Python script handshake */
-    uint64_t timeout_cycles = SYS_CYCLE_PER_SEC * 2UL;
-    uint64_t start_cycles = get_cycles();
-    uint8_t c;
+    struct HSS_BootImage *pImg = (struct HSS_BootImage *)ddr_addr;
 
-    while ((get_cycles() - start_cycles) < timeout_cycles) {
-        if (uart_read_nonblock(&c)) {
-            if (c == 'Q' || c == '\e') return -1;
-            if (c == ack_str[recognized]) {
-                recognized++;
-                if (recognized == SFL_MAGIC_LEN) return 0;
-            } else {
-                recognized = (c == ack_str[0]) ? 1 : 0;
+    /* 1. Structured HSS Boot Image (0xb007c0de or compressed 0xc08b8355) */
+    if (HSS_Boot_VerifyMagic(pImg)) {
+        mHSS_PRINTF("[PAYLOAD] Detected HSS Boot Image header (magic: 0x%08x).\n", pImg->magic);
+
+        /*
+         * Relocate (or decompress) the HSS_BootImage container to upper cached DDR
+         * (0x103fc00000) so unpacking chunks into 0x80000000 does not overwrite the
+         * chunk descriptor table while HSS_BootHarts() copies segments.
+         */
+        uintptr_t safe_container_addr = (uintptr_t)CONFIG_SERVICE_BOOT_DDR_TARGET_ADDR;
+        struct HSS_BootImage *pStagedImg = (struct HSS_BootImage *)safe_container_addr;
+
+        if (pImg->magic == mHSS_COMPRESSED_MAGIC) {
+#if IS_ENABLED(CONFIG_COMPRESSION)
+            mHSS_PRINTF("[PAYLOAD] Decompressing payload to 0x%010lx...\n",
+                        (unsigned long)safe_container_addr);
+            HSS_Decompress((void *)pImg, (void *)pStagedImg);
+            if (pStagedImg->magic != mHSS_BOOT_MAGIC) {
+                mHSS_PRINTF("[PAYLOAD] ERROR: Decompressed header magic invalid (0x%08x)!\n",
+                            pStagedImg->magic);
+                return false;
+            }
+#else
+            mHSS_PRINTF("[PAYLOAD] ERROR: Compressed image received but CONFIG_COMPRESSION is disabled.\n");
+            return false;
+#endif
+        } else {
+            size_t copy_len = (pImg->bootImageLength > byte_count)
+                              ? (size_t)pImg->bootImageLength
+                              : byte_count;
+            if (ddr_addr != safe_container_addr) {
+                memcpy((void *)pStagedImg, (const void *)pImg, copy_len);
             }
         }
+
+        serialboot_print_payload_chunks_(pStagedImg);
+
+        mHSS_PRINTF("[PAYLOAD] Registering boot image and dispatching U54 harts...\n");
+        HSS_Register_Boot_Image(pStagedImg);
+        HSS_BootHarts();
+        return true;
     }
-    return 1;
+
+    /* 2. Raw flat binary without HSS header -> jump U54 harts directly to ddr_addr */
+    mHSS_PRINTF("[PAYLOAD] No HSS header magic found; treating as raw binary @ 0x%010lx.\n",
+                (unsigned long)ddr_addr);
+    serialboot_jump_raw_u54_(ddr_addr);
+    return true;
 }
 
-/* ----------------- SFL State Machine ----------------- */
+#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI)
+extern struct HSS_Storage *HSS_BootGetActiveStorage(void);
 
-int do_serialboot(void)
+static bool serialboot_write_block_storage_(serialboot_target_t target,
+                                            uintptr_t ddr_addr,
+                                            size_t byte_count)
 {
-    struct sfl_frame frame;
-    int failures = 0;
-    int is_flash_mode = 0;
-    uint32_t spi_flash_address = FLASH_DEFAULT_ADDR;
-    uint32_t spi_flash_start_address = 0;
-    uint32_t total_loaded_size = 0;
-
-    mHSS_PRINTF("\nReady for SFL transfer. Connect host script...\n");
-    uart_write_str(SFL_MAGIC_REQ);
-
-    if (check_ack() != 0) {
-        mHSS_PRINTF("No response or cancelled. Aborting.\n");
-        return 1;
+    struct HSS_BootImage *pImg = (struct HSS_BootImage *)ddr_addr;
+    if (!HSS_Boot_VerifyMagic(pImg)) {
+        mHSS_PRINTF("[FLASH] ERROR: Invalid HSS Boot Image magic at 0x%08lx!\n",
+                    (unsigned long)ddr_addr);
+        mHSS_PRINTF("[FLASH] Image must be packaged with hss-payload-generator (magic 0xb007c0de).\n");
+        return false;
     }
 
-    while (1) {
-        int idx = 0;
-        int timed_out = 1;
-        uint64_t byte_timeout = SYS_CYCLE_PER_SEC / 4;
-        uint64_t start = get_cycles();
-
-        while ((get_cycles() - start) < byte_timeout) {
-            uint8_t rx;
-            if (uart_read_nonblock(&rx)) {
-                start = get_cycles();
-                if (idx == 0) frame.payload_length = rx;
-                if (idx == 1) frame.crc[0] = rx;
-                if (idx == 2) frame.crc[1] = rx;
-                if (idx == 3) frame.cmd = rx;
-                if (idx >= 4) {
-                    frame.payload[idx - 4] = rx;
-                }
-
-                if (idx == (frame.payload_length + 4 - 1)) {
-                    timed_out = 0;
-                    break;
-                }
-                idx++;
-            }
-        }
-
-        if (timed_out) {
-            uart_write_byte(SFL_ACK_ERROR);
-            if (++failures >= MAX_FAILURES) return 1;
-            continue;
-        }
-
-        uint16_t rx_crc = ((uint16_t)frame.crc[0] << 8) | (uint16_t)frame.crc[1];
-        uint16_t calc_crc = sfl_crc16(&frame.cmd, frame.payload_length + 1);
-
-        if (calc_crc != rx_crc) {
-            uart_write_byte(SFL_ACK_CRCERROR);
-            if (++failures >= MAX_FAILURES) return 1;
-            continue;
-        }
-
-        switch (frame.cmd) {
-        case SFL_CMD_ABORT:
-            uart_write_byte(SFL_ACK_SUCCESS);
-            return 1;
-
-        case SFL_CMD_FLASH: {
-            is_flash_mode = 1;
-            spi_flash_address = FLASH_DEFAULT_ADDR;
-
-            if (frame.payload_length >= 4) {
-                uint32_t total_image_size = get_uint32(&frame.payload[0]);
-
-                if (frame.payload_length >= 8) {
-                    spi_flash_address = get_uint32(&frame.payload[4]);
-                }
-                spi_flash_start_address = spi_flash_address;
-
-                spi_flash_init();
-                spi_flash_global_unprotect();
-                spi_flash_erase_range(spi_flash_address, total_image_size);
-                uart_write_byte(SFL_ACK_SUCCESS);
-            } else {
-                uart_write_byte(SFL_ACK_ERROR);
-            }
+    const char *media_name = "Storage";
+    switch (target) {
+#if IS_ENABLED(CONFIG_SERVICE_MMC)
+        case SERIALBOOT_TARGET_EMMC:
+            media_name = "eMMC";
+            mHSS_PRINTF("[FLASH] Selecting eMMC interface...\n");
+            HSS_BootSelectEMMC();
             break;
-        }
 
-        case SFL_CMD_LOAD: {
-            if (frame.payload_length < 4) {
-                uart_write_byte(SFL_ACK_ERROR);
-                break;
-            }
-
-            failures = 0;
-            uint32_t load_size = frame.payload_length - 4;
-
-            if (is_flash_mode) {
-                /* Stream chunk directly to SPI Flash */
-                spi_flash_program(spi_flash_address, &frame.payload[4], load_size);
-                spi_flash_address += load_size;
-                total_loaded_size += load_size;
-                uart_write_byte(SFL_ACK_SUCCESS);
-            } else {
-                /* Direct RAM Download */
-                uintptr_t dest_addr = (uintptr_t)get_uint32(&frame.payload[0]);
-                size_t max_size;
-
-                if (!boot_load_max_size(dest_addr, &max_size) || (load_size > max_size)) {
-                    uart_write_byte(SFL_ACK_ERROR);
-                    return 1;
-                }
-
-                memcpy((void *)dest_addr, &frame.payload[4], load_size);
-                total_loaded_size += load_size;
-                uart_write_byte(SFL_ACK_SUCCESS);
-            }
+        case SERIALBOOT_TARGET_SDCARD:
+            media_name = "SD Card";
+            mHSS_PRINTF("[FLASH] Selecting SD Card interface...\n");
+            HSS_BootSelectSDCARD();
             break;
-        }
-
-        case SFL_CMD_DONE: {
-            uart_write_byte(SFL_ACK_SUCCESS);
-            mHSS_PRINTF("\n[FLASHWRITE] SPI Flash Direct Upload Complete!\n");
-            mHSS_PRINTF(" Target Flash Addr  : 0x%08X\n", (unsigned int)spi_flash_start_address);
-            mHSS_PRINTF(" Total Written Size : %u bytes\n\n", (unsigned int)total_loaded_size);
-            return 0;
-        }
-
-        case SFL_CMD_JUMP: {
-            uart_write_byte(SFL_ACK_SUCCESS);
-
-            if (is_flash_mode) {
-                mHSS_PRINTF("\n[INFO] Flash programming finished. Returning to prompt.\n");
-                return 0;
-            }
-
-            uintptr_t entry_point = (uintptr_t)get_uint32(&frame.payload[0]);
-            serialboot_jump(entry_point);
-            return 0;
-        }
-
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_QSPI)
+        case SERIALBOOT_TARGET_QSPI:
+            media_name = "QSPI Flash";
+            mHSS_PRINTF("[FLASH] Selecting QSPI Flash interface...\n");
+            HSS_BootSelectQSPI();
+            break;
+#endif
         default:
-            uart_write_byte(SFL_ACK_UNKNOWN);
-            break;
+            return false;
+    }
+
+    struct HSS_Storage *pStorage = HSS_BootGetActiveStorage();
+    if (!pStorage) {
+        mHSS_PRINTF("[FLASH] ERROR: No active storage driver available for %s.\n", media_name);
+        return false;
+    }
+
+    if (pStorage->init && !pStorage->init()) {
+        mHSS_PRINTF("[FLASH] ERROR: Failed to initialize %s.\n", media_name);
+        return false;
+    }
+
+    uint32_t blockSize = 512U;
+    uint32_t eraseSize = 512U;
+    uint32_t blockCount = 0U;
+    if (pStorage->getInfo) {
+        pStorage->getInfo(&blockSize, &eraseSize, &blockCount);
+    }
+    if (blockSize == 0U) {
+        blockSize = 512U;
+    }
+
+    size_t write_offset = 0U;
+#if IS_ENABLED(CONFIG_SERVICE_MMC) && IS_ENABLED(CONFIG_SERVICE_BOOT_MMC_USE_GPT)
+    if (target == SERIALBOOT_TARGET_EMMC || target == SERIALBOOT_TARGET_SDCARD) {
+        HSS_GPT_t gpt;
+        gpt.lbaSize = blockSize;
+        GPT_Init(&gpt, pStorage);
+        if (GPT_ReadHeader(&gpt)) {
+            size_t partIdx = 0U;
+            HSS_GPT_PartitionEntry_t const *pEntry = NULL;
+            size_t lbaOffset = 0U;
+            if (GPT_FindBootSectorIndex(&gpt, &partIdx, &pEntry) &&
+                GPT_PartitionIdToLBAOffset(&gpt, partIdx, &lbaOffset)) {
+                write_offset = lbaOffset * (size_t)blockSize;
+                mHSS_PRINTF("[FLASH] Found GPT boot partition %lu at offset 0x%lx.\n",
+                            (unsigned long)partIdx, (unsigned long)write_offset);
+            }
         }
     }
+#endif
+
+    size_t aligned_len = (byte_count + (size_t)blockSize - 1U) & ~((size_t)blockSize - 1U);
+    if (aligned_len > byte_count) {
+        memset((uint8_t *)(ddr_addr + byte_count), 0, aligned_len - byte_count);
+    }
+
+    mHSS_PRINTF("[FLASH] Writing %lu bytes (aligned: %lu) to %s offset 0x%lx...\n",
+                (unsigned long)byte_count,
+                (unsigned long)aligned_len,
+                media_name,
+                (unsigned long)write_offset);
+
+    if (!pStorage->writeBlock || !pStorage->writeBlock(write_offset, (void *)ddr_addr, aligned_len)) {
+        mHSS_PRINTF("[FLASH] ERROR: Write failed on %s!\n", media_name);
+        return false;
+    }
+
+    /* Read back header to verify write integrity */
+    struct HSS_BootImage verifyHdr;
+    memset(&verifyHdr, 0, sizeof(verifyHdr));
+    if (pStorage->readBlock && pStorage->readBlock(&verifyHdr, write_offset, sizeof(verifyHdr)) &&
+        HSS_Boot_VerifyMagic(&verifyHdr)) {
+        mHSS_PRINTF("[FLASH] SUCCESS: Payload verified on %s! Reset board to boot.\n", media_name);
+        return true;
+    }
+
+    mHSS_PRINTF("[FLASH] ERROR: Read-back verification failed on %s!\n", media_name);
+    return false;
+}
+#endif /* IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) */
+
+static void serialboot_handle_received_image_(serialboot_target_t target,
+                                              uintptr_t ddr_dest,
+                                              size_t bytes_received,
+                                              uintptr_t addr_or_offset)
+{
+    switch (target) {
+        case SERIALBOOT_TARGET_SPI:
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+            (void)spi_flash_write_payload((uint32_t)addr_or_offset, ddr_dest, bytes_received);
+#else
+            mHSS_PRINTF("[SERIALBOOT] ERROR: SPI Flash support (CONFIG_SERVICE_SPI_FLASH) is disabled.\n");
+#endif
+            break;
+
+#if IS_ENABLED(CONFIG_SERVICE_MMC)
+        case SERIALBOOT_TARGET_EMMC:
+        case SERIALBOOT_TARGET_SDCARD:
+            (void)serialboot_write_block_storage_(target, ddr_dest, bytes_received);
+            break;
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_QSPI)
+        case SERIALBOOT_TARGET_QSPI:
+            (void)serialboot_write_block_storage_(target, ddr_dest, bytes_received);
+            break;
+#endif
+
+        case SERIALBOOT_TARGET_DDR:
+        default:
+            (void)HSS_Boot_DecodeAndBootDDR(ddr_dest, bytes_received);
+            break;
+    }
+}
+
+int do_serialboot(serialboot_target_t target, uintptr_t addr_or_offset)
+{
+    uintptr_t ddr_dest = (target == SERIALBOOT_TARGET_DDR && addr_or_offset != 0U)
+                         ? addr_or_offset
+                         : (uintptr_t)SERIALBOOT_DEFAULT_DDR_ADDR;
+
+    mHSS_PRINTF("[SERIALBOOT] Staging buffer @ 0x%010lx. Waiting for SFL host...\n",
+                (unsigned long)ddr_dest);
+
+    /* Send exact 14-byte SFL magic trigger ("sL5DdSMmkekro\n") without CRLF expansion */
+    uart_send_raw_bytes_(SFL_MAGIC_REQ, SFL_MAGIC_LEN);
+
+    /* Wait for exact 14-byte SFL magic ACK ("z6IHG7cYDID6o\n") from mpfs-terminal.py */
+    const char *ack_str = SFL_MAGIC_ACK;
+    size_t matched = 0U;
+    while (matched < SFL_MAGIC_LEN) {
+        uint8_t ch = uart_read_byte_blocking_();
+        if (ch == (uint8_t)ack_str[matched]) {
+            matched++;
+        } else if (ch == (uint8_t)ack_str[0]) {
+            matched = 1U;
+        } else {
+            matched = 0U;
+        }
+    }
+
+    uint8_t frame_buf[260];
+    bool has_base_addr = false;
+    uint32_t base_host_addr = 0U;
+    bool host_requested_flash = false;
+    bool no_boot_only = false;
+    size_t bytes_received = 0U;
+    bool transfer_done = false;
+    bool aborted = false;
+
+    while (!transfer_done && !aborted) {
+        uint8_t payload_len = uart_read_byte_blocking_();
+        uint8_t crc_hi      = uart_read_byte_blocking_();
+        uint8_t crc_lo      = uart_read_byte_blocking_();
+        uint16_t rx_crc     = (uint16_t)(((uint16_t)crc_hi << 8) | (uint16_t)crc_lo);
+
+        /* Frame CRC covers cmd (1 byte) + payload (payload_len bytes) */
+        size_t body_len = (size_t)payload_len + 1U;
+        for (size_t i = 0U; i < body_len; i++) {
+            frame_buf[i] = uart_read_byte_blocking_();
+        }
+
+        uint16_t calc_crc = sfl_crc16_(frame_buf, body_len);
+        if (calc_crc != rx_crc) {
+            uart_send_reply_(SFL_ACK_CRCERROR);
+            continue;
+        }
+
+        uint8_t cmd = frame_buf[0];
+        const uint8_t *payload = &frame_buf[1];
+
+        switch (cmd) {
+            case SFL_CMD_FLASH:
+                /* mpfs-terminal.py --flash sends 4B file_size + 4B target flash offset */
+                if (payload_len < 8U) {
+                    uart_send_reply_(SFL_ACK_ERROR);
+                    aborted = true;
+                } else {
+                    host_requested_flash = true;
+                    base_host_addr = ((uint32_t)payload[4] << 24) |
+                                     ((uint32_t)payload[5] << 16) |
+                                     ((uint32_t)payload[6] << 8)  |
+                                      (uint32_t)payload[7];
+                    has_base_addr = true;
+                    uart_send_reply_(SFL_ACK_SUCCESS);
+                }
+                break;
+
+            case SFL_CMD_LOAD:
+                if (payload_len < 4U) {
+                    uart_send_reply_(SFL_ACK_ERROR);
+                    aborted = true;
+                } else {
+                    uint32_t pkt_addr = ((uint32_t)payload[0] << 24) |
+                                        ((uint32_t)payload[1] << 16) |
+                                        ((uint32_t)payload[2] << 8)  |
+                                         (uint32_t)payload[3];
+                    size_t data_len = (size_t)payload_len - 4U;
+
+                    if (!has_base_addr) {
+                        base_host_addr = pkt_addr;
+                        has_base_addr = true;
+                    }
+
+                    size_t rel_offset = (pkt_addr >= base_host_addr)
+                                        ? (size_t)(pkt_addr - base_host_addr)
+                                        : (size_t)pkt_addr;
+
+                    if ((rel_offset + data_len) > SERIALBOOT_MAX_PAYLOAD_SIZE) {
+                        uart_send_reply_(SFL_ACK_ERROR);
+                        aborted = true;
+                    } else {
+                        memcpy((uint8_t *)(ddr_dest + rel_offset), &payload[4], data_len);
+                        if ((rel_offset + data_len) > bytes_received) {
+                            bytes_received = rel_offset + data_len;
+                        }
+                        uart_send_reply_(SFL_ACK_SUCCESS);
+                    }
+                }
+                break;
+
+            case SFL_CMD_DONE:
+            case SFL_CMD_JUMP:
+                uart_send_reply_(SFL_ACK_SUCCESS);
+                transfer_done = true;
+                break;
+
+            case SFL_CMD_ABORT:
+                uart_send_reply_(SFL_ACK_SUCCESS);
+                if (bytes_received > 0U) {
+                    /* Sent by mpfs-terminal.py --no-boot after full transfer */
+                    no_boot_only = true;
+                    transfer_done = true;
+                } else {
+                    aborted = true;
+                }
+                break;
+
+            default:
+                uart_send_reply_(SFL_ACK_UNKNOWN);
+                break;
+        }
+    }
+
+    if (aborted || bytes_received == 0U) {
+        mHSS_PRINTF("\n[SERIALBOOT] Transfer aborted or 0 bytes received.\n");
+        return -1;
+    }
+
+    mHSS_PRINTF("\n[SERIALBOOT] Transfer complete (%lu bytes received, host base: 0x%x).\n",
+                (unsigned long)bytes_received, base_host_addr);
+
+    if (no_boot_only) {
+        mHSS_PRINTF("[SERIALBOOT] --no-boot requested: payload staged in DDR @ 0x%010lx.\n",
+                    (unsigned long)ddr_dest);
+        return 0;
+    }
+
+    /*
+     * If plain 'serialboot' was typed while host passed '--flash --kernel-adr <offset>'
+     * (SFL_CMD_FLASH or base_host_addr < 0x80000000), route automatically to SPI flash.
+     */
+    if (target == SERIALBOOT_TARGET_DDR &&
+        (host_requested_flash || (has_base_addr && base_host_addr < SERIALBOOT_DEFAULT_DDR_ADDR))) {
+        target = SERIALBOOT_TARGET_SPI;
+        addr_or_offset = (uintptr_t)base_host_addr;
+    }
+
+    serialboot_handle_received_image_(target, ddr_dest, bytes_received, addr_or_offset);
     return 0;
 }
 
-/* ----------------- Manual CLI Flash Handlers ----------------- */
-
 void do_flash_read_id(void)
 {
-    uint8_t mfg = 0, dev = 0, cap = 0;
-
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
     spi_flash_init();
-    spi_flash_read_id(&mfg, &dev, &cap);
 
+    uint8_t mfr = 0U, dev = 0U, cap = 0U;
+    spi_flash_read_id(&mfr, &dev, &cap);
     const struct spi_flash_info *info = spi_flash_get_info();
 
-    mHSS_PRINTF("\n[SPI_FLASH] JEDEC ID & Device Info:\n");
-    mHSS_PRINTF(" Identified   : %s\n", (info && info->name) ? info->name : "Unknown");
-    mHSS_PRINTF(" Manufacturer : 0x%02X (0x20=Micron, 0xEF=Winbond, 0xBF=SST)\n", mfg);
-    mHSS_PRINTF(" Device Type  : 0x%02X\n", dev);
-    mHSS_PRINTF(" Capacity ID  : 0x%02X\n", cap);
-    mHSS_PRINTF(" 4-Byte Addr  : %s\n\n", (info && info->needs_4byte_addr) ? "Enabled" : "Disabled");
-}
-
-void do_flash_write(uint32_t spi_offset, uintptr_t ram_addr, uint32_t size)
-{
-    mHSS_PRINTF("\n[FLASH_WRITE] Initializing SPI Flash...\n");
-    spi_flash_init();
-    spi_flash_global_unprotect();
-
-    mHSS_PRINTF("[FLASH_WRITE] Erasing range 0x%08X to 0x%08X (%u bytes)...\n",
-                spi_offset, spi_offset + size, size);
-    spi_flash_erase_range(spi_offset, size);
-
-    mHSS_PRINTF("[FLASH_WRITE] Programming from DDR 0x%016lx to Flash 0x%08X...\n",
-                ram_addr, spi_offset);
-    spi_flash_program(spi_offset, (const uint8_t *)ram_addr, size);
-
-    mHSS_PRINTF("[FLASH_WRITE] Programming complete.\n\n");
+    mHSS_PRINTF("[SPI-FLASH] JEDEC ID: MFR=0x%02X, DEV=0x%02X, CAP=0x%02X (%s)\n",
+                mfr, dev, cap, info ? info->name : "Unknown");
+#else
+    mHSS_PRINTF("[SPI-FLASH] ERROR: CONFIG_SERVICE_SPI_FLASH is not enabled in this build.\n");
+#endif
 }
 
 void do_flashboot(uint32_t spi_offset)
 {
-    uint8_t header[8];
-    uintptr_t dest_addr = 0x80000000UL;
-    uint32_t image_size = 0;
-    uint32_t read_offset = spi_offset;
-
-    mHSS_PRINTF("\n[FLASHBOOT] Reading FBI header from SPI Flash offset 0x%08X...\n", spi_offset);
-
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
     spi_flash_init();
-    spi_flash_read(spi_offset, header, sizeof(header));
-
-    uint32_t w0_le = get_uint32_le(&header[0]);
-    uint32_t w1_le = get_uint32_le(&header[4]);
-
-    /* Case 1: [Length (4B), CRC32 (4B)] */
-    if (w0_le > 0 && w0_le < 0x04000000UL && !is_valid_ram_addr((uintptr_t)w1_le)) {
-        dest_addr   = 0x80000000UL;
-        image_size  = w0_le;
-        read_offset = spi_offset + 8;
-        mHSS_PRINTF("[FLASHBOOT] FBI [Length, CRC32] detected:\n");
-        mHSS_PRINTF("  Payload Size : %u bytes (0x%X)\n", image_size, image_size);
-        mHSS_PRINTF("  Payload CRC  : 0x%08X\n", w1_le);
-        mHSS_PRINTF("  Target DDR   : 0x%016lx\n", dest_addr);
-    }
-    /* Case 2: [Length (4B), RAM Addr (4B)] */
-    else if (w0_le > 0 && w0_le < 0x04000000UL && is_valid_ram_addr((uintptr_t)w1_le)) {
-        dest_addr   = (uintptr_t)w1_le;
-        image_size  = w0_le;
-        read_offset = spi_offset + 8;
-        mHSS_PRINTF("[FLASHBOOT] FBI [Length, Addr] detected: Addr=0x%016lx, Size=%u bytes\n", dest_addr, image_size);
-    }
-    /* Case 3: [RAM Addr (4B), Length (4B)] */
-    else if (is_valid_ram_addr((uintptr_t)w0_le) && w1_le > 0 && w1_le < 0x04000000UL) {
-        dest_addr   = (uintptr_t)w0_le;
-        image_size  = w1_le;
-        read_offset = spi_offset + 8;
-        mHSS_PRINTF("[FLASHBOOT] FBI [Addr, Length] detected: Addr=0x%016lx, Size=%u bytes\n", dest_addr, image_size);
-    }
-    /* Case 4: Raw binary fallback */
-    else {
-        dest_addr   = 0x80000000UL;
-        image_size  = 32576;
-        read_offset = spi_offset;
-        mHSS_PRINTF("[FLASHBOOT] Warning: No FBI header matched. Reading raw binary (32576 B) to 0x%016lx...\n", dest_addr);
-    }
-
-    mHSS_PRINTF("[FLASHBOOT] Copying %u bytes from SPI 0x%08X to DDR 0x%016lx...\n",
-                image_size, read_offset, dest_addr);
-    spi_flash_read(read_offset, (uint8_t *)dest_addr, image_size);
-
-    /* Verify first 4 instruction words */
-    uint32_t *p_code = (uint32_t *)dest_addr;
-    mHSS_PRINTF("[FLASHBOOT] DDR First 4 Words: 0x%08X 0x%08X 0x%08X 0x%08X\n",
-                p_code[0], p_code[1], p_code[2], p_code[3]);
-
-    if (p_code[0] == 0xFFFFFFFFUL || p_code[0] == 0x00000000UL) {
-        mHSS_PRINTF("[FLASHBOOT] Error: Blank memory at execution address. Aborting boot.\n\n");
+    const struct spi_flash_info *info = spi_flash_get_info();
+    if (!info || info->mfr_id == 0x00U || info->mfr_id == 0xFFU) {
+        mHSS_PRINTF("[FLASHBOOT] ERROR: No SPI Flash detected (JEDEC ID: 0x%02X).\n",
+                    info ? info->mfr_id : 0xFFU);
         return;
     }
 
-    mHSS_PRINTF("[FLASHBOOT] Launching application on U54 harts...\n");
-    serialboot_jump(dest_addr);
+    struct HSS_BootImage hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    spi_flash_read(spi_offset, (uint8_t *)&hdr, sizeof(hdr));
+
+    if (!HSS_Boot_VerifyMagic(&hdr)) {
+        mHSS_PRINTF("[FLASHBOOT] ERROR: Invalid HSS Boot Image magic at SPI offset 0x%x!\n",
+                    spi_offset);
+        return;
+    }
+
+    uintptr_t ddr_dest = (uintptr_t)SERIALBOOT_DEFAULT_DDR_ADDR;
+    size_t img_len = (size_t)hdr.bootImageLength;
+    if (img_len < sizeof(hdr) || img_len > SERIALBOOT_MAX_PAYLOAD_SIZE) {
+        mHSS_PRINTF("[FLASHBOOT] ERROR: Invalid bootImageLength (%lu bytes).\n",
+                    (unsigned long)img_len);
+        return;
+    }
+
+    mHSS_PRINTF("[FLASHBOOT] Reading %lu bytes from SPI @ 0x%x to DDR @ 0x%010lx...\n",
+                (unsigned long)img_len, spi_offset, (unsigned long)ddr_dest);
+    spi_flash_read(spi_offset, (uint8_t *)ddr_dest, img_len);
+
+    (void)HSS_Boot_DecodeAndBootDDR(ddr_dest, img_len);
+#else
+    (void)spi_offset;
+    mHSS_PRINTF("[FLASHBOOT] ERROR: CONFIG_SERVICE_SPI_FLASH is not enabled in this build.\n");
+#endif
 }

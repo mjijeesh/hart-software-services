@@ -122,9 +122,7 @@ struct tinycli_toplevel_cmd_safe {
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-    extern int do_serialboot(void);
-    extern void do_flash_read_id(void);
-    extern void do_flashboot(uint32_t spi_offset);
+#    include "services/serialboot/serialboot.h"
 
     static void tinyCLI_SerialBoot_(void);
     static void tinyCLI_FlashId_(void);
@@ -254,6 +252,10 @@ enum CmdId {
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
     CMD_SERIALBOOT,
+    CMD_SERIALBOOT_SD,
+    CMD_SERIALBOOT_EMMC,
+    CMD_SERIALBOOT_QSPI,
+    CMD_SERIALBOOT_SPI,
     CMD_FLASHID,
     CMD_FLASHBOOT,
     CMD_NETBOOT,
@@ -351,9 +353,9 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL: SERIALBOOT", tinyCLI_SerialBoot_ },
-    { CMD_FLASHID, "FLASHID", "Read SPI Flash JEDEC ID: FLASHID", tinyCLI_FlashId_ },
-    { CMD_FLASHBOOT, "FLASHBOOT", "Boot image from SPI Flash: FLASHBOOT <spi_offset>", tinyCLI_FlashBoot_ },
+    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ },
+    { CMD_FLASHID,    "FLASHID",    "Read SPI Flash JEDEC ID: FLASHID",                                                    tinyCLI_FlashId_ },
+    { CMD_FLASHBOOT,  "FLASHBOOT",  "Boot image from SPI Flash: FLASHBOOT <spi_offset>",                                   tinyCLI_FlashBoot_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
     { CMD_NETBOOT, "NETBOOT", "Download and run/flash payload via TFTP: NETBOOT [sd|emmc|spi|qspi] [server_ip] [filename] [addr/offset]", tinyCLI_NetBoot_ },
@@ -575,9 +577,77 @@ static void tinyCLI_NetBoot_(void)
 #endif
 
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
+#define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_MMC)
+static void tinyCLI_SerialBoot_SD_(void)
+{
+    do_serialboot(SERIALBOOT_TARGET_SDCARD, 0U);
+}
+
+static void tinyCLI_SerialBoot_EMMC_(void)
+{
+    do_serialboot(SERIALBOOT_TARGET_EMMC, 0U);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_QSPI)
+static void tinyCLI_SerialBoot_QSPI_(void)
+{
+    do_serialboot(SERIALBOOT_TARGET_QSPI, 0U);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
+static void tinyCLI_SerialBoot_SPI_(void)
+{
+    uint32_t offset = (uint32_t)CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET;
+    if (argc_tokenCount > 2u) {
+        offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[2]);
+    }
+    do_serialboot(SERIALBOOT_TARGET_SPI, (uintptr_t)offset);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
+static const struct tinycli_cmd serialbootCmds[] = {
+#if IS_ENABLED(CONFIG_SERVICE_MMC)
+    { CMD_SERIALBOOT_SD,   "SD",   "Receive binary over SFL and flash to SD Card: SERIALBOOT SD",           tinyCLI_SerialBoot_SD_ },
+    { CMD_SERIALBOOT_EMMC, "EMMC", "Receive binary over SFL and flash to eMMC: SERIALBOOT EMMC",              tinyCLI_SerialBoot_EMMC_ },
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_QSPI)
+    { CMD_SERIALBOOT_QSPI, "QSPI", "Receive binary over SFL and flash to QSPI Flash: SERIALBOOT QSPI",        tinyCLI_SerialBoot_QSPI_ },
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
+    { CMD_SERIALBOOT_SPI,  "SPI",  "Receive binary over SFL and flash to SPI Flash: SERIALBOOT SPI [offset]", tinyCLI_SerialBoot_SPI_ },
+#endif
+};
+#endif
+
 static void tinyCLI_SerialBoot_(void)
 {
-    do_serialboot();
+#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
+    if (argc_tokenCount > 1u) {
+        if (dispatch_command_(serialbootCmds, ARRAY_SIZE(serialbootCmds), 1u)) {
+            return;
+        }
+
+        if (argv_tokenArray[1][0] < '0' || argv_tokenArray[1][0] > '9') {
+            display_help_(serialbootCmds, ARRAY_SIZE(serialbootCmds), 1u);
+            mHSS_PRINTF("Or run without subcommand to load directly to DDR and execute:\n"
+                        "  SERIALBOOT [load_addr]\n");
+            return;
+        }
+    }
+#endif
+
+    uintptr_t load_addr = 0x80000000UL;
+    if (argc_tokenCount > 1u) {
+        load_addr = (uintptr_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[1]);
+    }
+    do_serialboot(SERIALBOOT_TARGET_DDR, load_addr);
 }
 
 static void tinyCLI_FlashId_(void)
@@ -587,7 +657,7 @@ static void tinyCLI_FlashId_(void)
 
 static void tinyCLI_FlashBoot_(void)
 {
-    uint32_t offset = 0x00020000UL; /* Default offset from SFL flash write */
+    uint32_t offset = (uint32_t)CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET;
 
     if (argc_tokenCount >= 2) {
         offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[1]);
