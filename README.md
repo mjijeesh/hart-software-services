@@ -217,7 +217,7 @@ make BOARD=mpfs-icicle-kit defconfig
 make BOARD=mpfs-icicle-kit menuconfig
 
 # Compile HSS binary and eNVM wrapper
-make -j\$(nproc) BOARD=mpfs-icicle-kit-es
+make BOARD=mpfs-icicle-kit
 ```
 
 Build outputs will be generated in build/, including hss-envm-wrapper.hex.
@@ -229,7 +229,7 @@ Ensure your development kit is connected via USB, then execute:
 Bash
 
 ```
-make BOARD=mpfs-icicle-kit-es program
+make BOARD=mpfs-icicle-kit program
 ```
 
 *(Alternatively, import build/bootmode1/envm\_wrapper\_bm1.hex into FlashPro Express and program it manually).*
