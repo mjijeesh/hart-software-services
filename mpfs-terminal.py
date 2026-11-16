@@ -270,9 +270,12 @@ class MPFSTerminal:
                     sys.stdout.flush()
 
                     self.magic_buffer = self.magic_buffer[1:] + c
+
                     if self.magic_buffer == sfl_magic_req:
                         if not self.kernel_path:
-                            print(f"\n{LOG_PREFIX} Board requested serialboot, but no kernel file was specified (--kernel <file>). Ignoring upload request.")
+                            print(f"\n{LOG_PREFIX} Board requested serialboot, but no valid --kernel file was specified. Sending ABORT...")
+                            self.ser.write(sfl_magic_ack + SFLFrame(sfl_cmd_abort, b"").encode())
+                            self.ser.flush()
                         elif not os.path.exists(self.kernel_path):
                             print(f"\n{LOG_PREFIX} [ERROR] Kernel file '{self.kernel_path}' not found. Ignoring upload request.")
                         else:

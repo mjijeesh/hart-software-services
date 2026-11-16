@@ -84,7 +84,7 @@
 // local module functions
 
 #if IS_ENABLED(CONFIG_SERVICE_BOOT)
-static void printBootImageDetails_(struct HSS_BootImage const * const pBootImage);
+static void __attribute__((unused)) printBootImageDetails_(struct HSS_BootImage const * const pBootImage);
 static bool tryBootFunction_(struct HSS_Storage *pStorage, HSS_GetBootImageFnPtr_t getBootImageFunction);
 #if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI)
 typedef bool (*HSS_BootImageCopyFnPtr_t)(void *pDest, size_t srcOffset, size_t byteCount);
@@ -159,6 +159,11 @@ static struct HSS_Storage snvmStorage_ = {
 };
 #endif
 
+#define HAS_LOCAL_BOOT_STORAGE (IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM) || \
+    IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI) || \
+    IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_BOOT_USE_PAYLOAD))
+
+#if HAS_LOCAL_BOOT_STORAGE
 static struct HSS_Storage *pStorages[] =
 {
 #if IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM)
@@ -177,34 +182,47 @@ static struct HSS_Storage *pStorages[] =
 	&payloadStorage_,
 #endif
 };
+#endif
 
 static struct HSS_Storage *pDefaultStorage = NULL;
 
 #if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || (IS_ENABLED(CONFIG_SERVICE_SPI) && (SPI_FLASH_BOOT_ENABLED))
 struct HSS_BootImage bootImage __attribute__((aligned(8)));
-#elif IS_ENABLED(CONFIG_SERVICE_BOOT_USE_PAYLOAD) || IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM)
+#elif IS_ENABLED(CONFIG_SERVICE_BOOT_USE_PAYLOAD) || IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM) || \
+      IS_ENABLED(CONFIG_SERVICE_SERIALBOOT) || IS_ENABLED(CONFIG_SERVICE_NETBOOT)
 //
 #else
 #    error Unable to determine boot mechanism
 #endif
 
-struct HSS_Storage *HSS_BootGetActiveStorage(void);
-struct HSS_Storage *HSS_BootGetActiveStorage(void)
+static struct HSS_Storage *getDefaultStorage_(void)
 {
     struct HSS_Storage *pResult = pDefaultStorage;
 
+#if HAS_LOCAL_BOOT_STORAGE
     if (!pResult) {
         pResult = pStorages[0];
     }
+#endif
 
     return pResult;
 }
 
+struct HSS_Storage *HSS_BootGetActiveStorage(void);
+struct HSS_Storage *HSS_BootGetActiveStorage(void)
+{
+    return getDefaultStorage_();
+}
+
 void HSS_BootListStorageProviders(void)
 {
+#if HAS_LOCAL_BOOT_STORAGE
     for (uint32_t i = 0; i < ARRAY_SIZE(pStorages); i++) {
         mHSS_DEBUG_PRINTF_EX(" - %s\n", pStorages[i]->name);
     }
+#else
+    mHSS_DEBUG_PRINTF_EX(" - None (DDR SerialBoot/Netboot only)\n");
+#endif
 }
 
 void HSS_BootHarts(void)
@@ -242,6 +260,7 @@ bool HSS_BootInit(void)
             result = tryBootFunction_(pDefaultStorage, pDefaultStorage->getBootImage);
         }
     } else {
+#if HAS_LOCAL_BOOT_STORAGE
         for (int i = 0; i < ARRAY_SIZE(pStorages); i++) {
             mHSS_DEBUG_PRINTF(LOG_NORMAL, "Trying to get boot image via %s ...\n", pStorages[i]->name);
 
@@ -256,6 +275,9 @@ bool HSS_BootInit(void)
                 if (result) { break; }
             }
         }
+#else
+        result = false;
+#endif
     }
 
     HSS_PerfCtr_Lap(perf_ctr_index);
@@ -351,7 +373,7 @@ bool tryBootFunction_(struct HSS_Storage *pStorage, HSS_GetBootImageFnPtr_t cons
 
 /////////////////////////////////////////////////////////////////////////////////////////
 
-static void printBootImageDetails_(struct HSS_BootImage const * const pBootImage)
+static void __attribute__((unused)) printBootImageDetails_(struct HSS_BootImage const * const pBootImage)
 {
 #  ifdef BOOT_DEBUG
     mHSS_DEBUG_PRINTF(LOG_NORMAL, " - set name is >>%s<<\n", pBootImage->set_name);
@@ -799,7 +821,7 @@ bool HSS_Storage_Init(void)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
+    struct HSS_Storage *pStorage = getDefaultStorage_();
     assert(pStorage);
 
     if (pStorage->init) {
@@ -814,7 +836,7 @@ bool HSS_Storage_ReadBlock(void *pDest, size_t srcOffset, size_t byteCount)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
+    struct HSS_Storage *pStorage = getDefaultStorage_();
     assert(pStorage);
 
     if (pStorage->readBlock) {
@@ -852,7 +874,7 @@ bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
+    struct HSS_Storage *pStorage = getDefaultStorage_();
     assert(pStorage);
 
     if (pStorage->writeBlock) {
@@ -864,7 +886,7 @@ bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
 
 void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *pBlockCount)
 {
-    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
+    struct HSS_Storage *pStorage = getDefaultStorage_();
     assert(pStorage);
 
     if (pStorage->getInfo) {
@@ -875,7 +897,7 @@ void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *p
 
 void HSS_Storage_FlushWriteBuffer(void)
 {
-    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
+    struct HSS_Storage *pStorage = getDefaultStorage_();
     assert(pStorage);
 
     if (pStorage->flushWriteBuffer) {
