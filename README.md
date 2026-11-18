@@ -1,3 +1,252 @@
+# PolarFire SoC: 5-Core Bare-Metal Boot Guide
+
+This guide details how to modify the Microchip Hart Software Services (HSS) and a target bare-metal application to allow **Hart 0 (E51)** to leave the HSS bootloader and join Harts 1–4 (U54s) in executing a unified 5-core bare-metal application from DDR or L2-LIM.
+
+By default, HSS retains control of E51 to run background services (watchdogs, IPIs, BEU monitoring) and only hands over the U54 cores. This custom flow detects a specifically tagged payload and safely hands over all five cores.
+
+---
+
+## Part 1: Modifying Hart Software Services (HSS)
+
+### 1. Disable the HSS Watchdog Service
+To prevent the HSS from arming hardware watchdogs that will expire once E51 leaves the bootloader, disable the virtual watchdog service.
+In your HSS root directory:
+```bash
+sed -i 's/^CONFIG_SERVICE_WDOG=y/# CONFIG_SERVICE_WDOG is not set/' .config
+```
+
+### 2. Fix Missing Reboot Handler in BEU & CLI
+Because `CONFIG_SERVICE_WDOG` was disabled, the `HSS_reboot_cold()` function gets excluded. 
+Add a fallback to `services/beu/beu_service.c` right after the `#include` directives:
+
+```c
+#if !IS_ENABLED(CONFIG_SERVICE_WDOG)
+void HSS_reboot_cold(enum HSSHartId target)
+{
+    (void)target;
+    *(volatile uint32_t *)0x20002018UL = 0xDEADu; /* SYSREG->MSS_RESET_CR */
+    while (1) {
+        __asm__ __volatile__("wfi");
+    }
+}
+#endif
+```
+
+Next, fix the `reset` command in `services/tinycli/tinycli_api.c`. Replace the `tinyCLI_Reset_` function (around line 800) with:
+```c
+static void tinyCLI_Reset_(void)
+{
+    HSS_reboot_cold(HSS_HART_ALL);
+}
+```
+
+### 3. Add E51 Handover Logic (`services/boot/hss_boot_service.c`)
+Open `services/boot/hss_boot_service.c`. Near line 190 (just below `struct HSS_BootImage *pBootImage = NULL;`), insert the handover state and helper functions. We use a custom substring matcher since `strstr` isn't available in the HSS environment:
+
+```c
+static bool s_e51_handover_pending = false;
+static uintptr_t s_e51_handover_entry = 0u;
+
+static bool hss_contains_substr_(const char *haystack, size_t max_len, const char *needle)
+{
+    if (!haystack || !needle || (*needle == '\0')) return false;
+    for (size_t i = 0u; (i < max_len) && (haystack[i] != '\0'); i++) {
+        size_t j = 0u;
+        while ((needle[j] != '\0') && ((i + j) < max_len) && (haystack[i + j] == needle[j])) j++;
+        if (needle[j] == '\0') return true;
+    }
+    return false;
+}
+
+static bool hss_is_five_core_payload_(const struct HSS_BootImage *pImage)
+{
+    if (!pImage || (pImage->magic != mHSS_BOOT_MAGIC)) return false;
+    
+    /* Require explicit 5-core marker in set_name */
+    if (!hss_contains_substr_((const char *)pImage->set_name, sizeof(pImage->set_name), "5CORES")) {
+        return false;
+    }
+
+    const uintptr_t entry = pImage->hart[0].entryPoint;
+    if (entry == 0u) return false;
+
+    /* Ensure all 4 U54 cores share the same entry point and skip OpenSBI */
+    for (unsigned int i = 0u; i < (MAX_NUM_HARTS - 1u); i++) {
+        if (!(pImage->hart[i].flags & BOOT_FLAG_SKIP_OPENSBI) ||
+            (pImage->hart[i].entryPoint != entry)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void hss_e51_jump_to_payload_(uintptr_t entry_addr)
+{
+    mHSS_PRINTF("[BOOT] 5-core payload detected; handing over E51 (Hart 0) to 0x%010lx...\n",
+                (unsigned long)entry_addr);
+
+    /* Allow HSS UART to drain */
+    for (volatile uint32_t d = 0u; d < 250000u; d++) __asm__ __volatile__("nop");
+
+    /* Disable M-mode interrupts so HSS's trap vector is never entered */
+    __asm__ __volatile__("csrci mstatus, 0x8" ::: "memory");
+    __asm__ __volatile__("csrw mie, zero" ::: "memory");
+    __asm__ __volatile__("csrw mip, zero" ::: "memory");
+
+    /* Synchronize before executing payload */
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
+    __asm__ __volatile__("fence.i" ::: "memory");
+
+    void (*e51_entry)(void) = (void (*)(void))entry_addr;
+    e51_entry();
+    __builtin_unreachable();
+}
+```
+
+**Arm the Handover:**
+Inside `HSS_Register_Boot_Image(struct HSS_BootImage *pImage)` in the same file:
+```c
+void HSS_Register_Boot_Image(struct HSS_BootImage *pImage)
+{
+    pBootImage = pImage;
+    if (hss_is_five_core_payload_(pImage)) {
+        s_e51_handover_entry = (uintptr_t)pImage->hart[0].entryPoint;
+        s_e51_handover_pending = true;
+    } else {
+        s_e51_handover_entry = 0u;
+        s_e51_handover_pending = false;
+    }
+}
+```
+
+**Trigger the Jump:**
+Inside `boot_idle_handler(struct StateMachine * const pMyMachine)`:
+```c
+static void boot_idle_handler(struct StateMachine * const pMyMachine)
+{
+    struct HSS_Boot_LocalData const * const pInstanceData = pMyMachine->pInstanceData;
+    IPI_ConsumeIntent(pInstanceData->target, IPI_MSG_BOOT_REQUEST);
+
+    if (s_e51_handover_pending && (SYSREG->BOOT_FAIL_CR == 0u)) {
+        bool all_u54_done = true;
+        for (unsigned int i = 0u; i < ARRAY_SIZE(bootMachine); i++) {
+            enum HSSHartId hartId = bootMachine[i].hartId;
+            if ((bootMachine[i].pMachine->state != (stateType_t)BOOT_IDLE) ||
+                (atomic_read(&bootComplete[hartId]) == 0)) {
+                all_u54_done = false;
+                break;
+            }
+        }
+
+        if (all_u54_done) {
+            const uintptr_t target_addr = s_e51_handover_entry;
+            s_e51_handover_pending = false;
+            s_e51_handover_entry = 0u;
+            hss_e51_jump_to_payload_(target_addr);
+        }
+    }
+}
+```
+
+Rebuild HSS (`make BOARD=mpfs-disco-kit all program`) and flash to eNVM.
+
+---
+
+## Part 2: Modifying the 5-Core Application
+
+### 1. Tag the Payload in `Makefile`
+Update your target application's `Makefile` to inject the `5CORES` tag into the `set-name` so HSS recognizes it.
+
+```makefile
+NUM_HARTS ?= 5
+PAYLOAD_SET_PREFIX := $(if $(filter 5,$(NUM_HARTS)),PolarFire-SoC-HSS::5CORES,PolarFire-SoC-HSS)
+
+$(BUILD_DIR)/payload.yaml: $(ELF_FILE)
+	@mkdir -p $(dir $@)
+	@ENTRY=$$($(READELF) -h $< | awk '/Entry point address:/ {print $$4}'); \
+	printf "set-name: '$(PAYLOAD_SET_PREFIX)::$(TARGET)'\n\nhart-entry-points: {\n  u54_1: '%s',\n  u54_2: '%s',\n  u54_3: '%s',\n  u54_4: '%s'\n}\n\npayloads:\n  %s:\n    owner-hart: u54_1\n    secondary-hart: u54_2\n    secondary-hart: u54_3\n    secondary-hart: u54_4\n    priv-mode: prv_m\n    skip-opensbi: true\n    payload-name: \"%s\"\n" \
+	"$$ENTRY" "$$ENTRY" "$$ENTRY" "$$ENTRY" "$<" "$(TARGET)" > $@
+```
+
+### 2. Enable E51 in `mpfs_hal` Configuration
+By default, the HAL parks E51. In your project's configuration files (`boards/mpfs-disco-kit/platform_config/lim-release/mpfs_hal_config/mss_sw_config.h` and the `ddr-release` variant):
+```c
+/* Change from 1 to 0 to enable Hart 0 */
+#ifndef MPFS_HAL_FIRST_HART
+#define MPFS_HAL_FIRST_HART    0
+#endif
+
+#ifndef MPFS_HAL_LAST_HART
+#define MPFS_HAL_LAST_HART     4
+#endif
+```
+
+### 3. Safely Reload Hardware Watchdogs
+Some Libero designs enable `WDOG0` in hardware at reset. If left un-refreshed, it will trigger a reset ~33 seconds after boot. 
+Add this to `application/hart_shared.h`:
+
+```c
+static inline uintptr_t wdog_base_addr(uint32_t hart_id)
+{
+    switch (hart_id) {
+        case 0U: return 0x20001000UL; /* WDOG0_LO (E51)   */
+        case 1U: return 0x20101000UL; /* WDOG1_LO (U54_1) */
+        case 2U: return 0x20103000UL; /* WDOG2_LO (U54_2) */
+        case 3U: return 0x20105000UL; /* WDOG3_LO (U54_3) */
+        case 4U: return 0x20107000UL; /* WDOG4_LO (U54_4) */
+        default: return 0UL;
+    }
+}
+
+static inline void refresh_hw_watchdog(uint32_t hart_id)
+{
+    uintptr_t base = wdog_base_addr(hart_id);
+    if (base == 0UL) return;
+
+    uint32_t status = *(volatile uint32_t *)(base + 0x08UL);
+    /* Bit 2 (0x04) = WDOG_ENABLED. Only reload if hardware actually enabled it. */
+    if ((status & 0x06U) == 0x04U) {
+        *(volatile uint32_t *)(base + 0x00UL) = 0xAC15DE42U;
+    }
+}
+```
+
+In `application/hart0/e51.c`, loop over all watchdogs inside your `while(1)` loop:
+```c
+    while (1) {
+        /* Keep all active hardware watchdogs alive from E51 */
+        for (uint32_t wd = 0U; wd < 5U; wd++) {
+            refresh_hw_watchdog(wd);
+        }
+        // ... (rest of CLI loop)
+    }
+```
+
+---
+
+## Part 3: Building and Deploying
+
+Build your application for DDR execution:
+```bash
+make BOARD=mpfs-disco-kit clean ddr-release
+```
+
+Upload the generated payload using `mpfs-terminal.py` on the HSS serial port (`MMUART0`):
+```bash
+python3 tools/mpfs-terminal.py /dev/ttyUSB1 --kernel build/mpfs-disco-kit/ddr-release/mpfs-5harts-app_payload.bin
+```
+*(You can also use this same `_payload.bin` directly on an SD Card, eMMC, or QSPI partition).*
+
+---
+
+## Part 4: Connecting and Testing
+
+*   **HSS Console (`/dev/ttyUSB1`):** Shows the boot process. You will see it intercept the `5CORES` tag and print: `[BOOT] 5-core payload detected; handing over E51 (Hart 0) to 0x80000000...`
+*   **Application CLI (`/dev/ttyUSB2`):** Your custom E51 telemetry interface (`e51>`) will become active here. You can monitor the U54 workers, inject faults, or pause execution without the system auto-rebooting.
+
+
+
+
 # Hart Software Services (HSS)
 
 The Microchip Hart Software Services (HSS) serves as the zero-stage bootloader and system controller for PolarFire® SoC FPGAs. It executes on the E51 monitor core to configure clocks, train DDR memory, release application U54 harts, and load boot payloads (U-Boot, Linux, or bare-metal binaries).

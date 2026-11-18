@@ -184,8 +184,82 @@ static struct HSS_Boot_LocalData localData[MAX_NUM_HARTS-1] = {
     { HSS_HART_U54_4, NULL, NULL, 0u, 0u, 0u, IPI_MAX_NUM_OUTSTANDING_COMPLETES, 0u, PERF_CTR_UNINITIALIZED, 0u, 0u, { 0u, 0u, 0u, 0u } },
 };
 
+
+
 struct HSS_BootImage *pBootImage = NULL;
 static bool pmpSetupFlag[HSS_HART_NUM_PEERS] = { false, false, false, false, false };
+
+static bool s_e51_handover_pending = false;
+static uintptr_t s_e51_handover_entry = 0u;
+
+static bool hss_contains_substr_(const char *haystack, size_t max_len, const char *needle)
+{
+    if (!haystack || !needle || (*needle == '\0')) {
+        return false;
+    }
+
+    for (size_t i = 0u; (i < max_len) && (haystack[i] != '\0'); i++) {
+        size_t j = 0u;
+        while ((needle[j] != '\0') && ((i + j) < max_len) && (haystack[i + j] == needle[j])) {
+            j++;
+        }
+        if (needle[j] == '\0') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool hss_is_five_core_payload_(const struct HSS_BootImage *pImage)
+{
+    if (!pImage || (pImage->magic != mHSS_BOOT_MAGIC)) {
+        return false;
+    }
+
+    if (!hss_contains_substr_((const char *)pImage->set_name, sizeof(pImage->set_name), "5CORES") &&
+        !hss_contains_substr_((const char *)pImage->set_name, sizeof(pImage->set_name), "5harts")) {
+        return false;
+    }
+
+    const uintptr_t entry = pImage->hart[0].entryPoint;
+    if (entry == 0u) {
+        return false;
+    }
+
+    for (unsigned int i = 0u; i < (MAX_NUM_HARTS - 1u); i++) {
+        if (!(pImage->hart[i].flags & BOOT_FLAG_SKIP_OPENSBI) ||
+            (pImage->hart[i].entryPoint != entry)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static void hss_e51_jump_to_payload_(uintptr_t entry_addr)
+{
+    mHSS_PRINTF("[BOOT] 5-core payload detected; handing over E51 (Hart 0) to 0x%010lx...\n",
+                (unsigned long)entry_addr);
+
+    for (volatile uint32_t d = 0u; d < 250000u; d++) {
+        __asm__ __volatile__("nop");
+    }
+
+    __asm__ __volatile__("csrci mstatus, 0x8" ::: "memory");
+    __asm__ __volatile__("csrw mie, zero" ::: "memory");
+    __asm__ __volatile__("csrw mip, zero" ::: "memory");
+
+    __asm__ __volatile__("fence rw, rw" ::: "memory");
+    __asm__ __volatile__("fence.i" ::: "memory");
+
+    void (*e51_entry)(void) = (void (*)(void))entry_addr;
+    e51_entry();
+
+    __builtin_unreachable();
+}
+
 
 /*
  * individual boot machines, one per U54 hart
@@ -278,6 +352,8 @@ const struct {
  * This checks are done outside this function.
  *
  */
+
+
 static void boot_do_download_chunk(struct HSS_BootChunkDesc const *pChunk, ptrdiff_t subChunkOffset,
     size_t subChunkSize)
 {
@@ -860,9 +936,27 @@ static void boot_idle_onEntry(struct StateMachine * const pMyMachine)
 static void boot_idle_handler(struct StateMachine * const pMyMachine)
 {
     struct HSS_Boot_LocalData const * const pInstanceData = pMyMachine->pInstanceData;
-    IPI_ConsumeIntent(pInstanceData->target, IPI_MSG_BOOT_REQUEST); // check for boot requests
-}
+    IPI_ConsumeIntent(pInstanceData->target, IPI_MSG_BOOT_REQUEST);
 
+    if (s_e51_handover_pending && (SYSREG->BOOT_FAIL_CR == 0u)) {
+        bool all_u54_done = true;
+        for (unsigned int i = 0u; i < ARRAY_SIZE(bootMachine); i++) {
+            enum HSSHartId hartId = bootMachine[i].hartId;
+            if ((bootMachine[i].pMachine->state != (stateType_t)BOOT_IDLE) ||
+                (atomic_read(&bootComplete[hartId]) == 0)) {
+                all_u54_done = false;
+                break;
+            }
+        }
+
+        if (all_u54_done) {
+            const uintptr_t target_addr = s_e51_handover_entry;
+            s_e51_handover_pending = false;
+            s_e51_handover_entry = 0u;
+            hss_e51_jump_to_payload_(target_addr);
+        }
+    }
+}
 
 
 // ----------------------------------------------------------------------------
@@ -1164,6 +1258,14 @@ bool HSS_Boot_VerifyMagic(struct HSS_BootImage const * const pImage)
 void HSS_Register_Boot_Image(struct HSS_BootImage *pImage)
 {
     pBootImage = pImage;
+
+    if (hss_is_five_core_payload_(pImage)) {
+        s_e51_handover_entry = (uintptr_t)pImage->hart[0].entryPoint;
+        s_e51_handover_pending = true;
+    } else {
+        s_e51_handover_entry = 0u;
+        s_e51_handover_pending = false;
+    }
 }
 
 bool HSS_Boot_Custom(void)

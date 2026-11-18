@@ -115,6 +115,18 @@ static struct {
   { BEU_EVENT_DATA_CACHE_UNCORRECTABLE, BEU_Event_Name[BEU_EVENT_DATA_CACHE_UNCORRECTABLE], 0llu }
 };
 
+
+#if !IS_ENABLED(CONFIG_SERVICE_WDOG)
+void HSS_reboot_cold(enum HSSHartId target)
+{
+    (void)target;
+    *(volatile uint32_t *)0x20002018UL = 0xDEADu; /* SYSREG->MSS_RESET_CR */
+    while (1) {
+        __asm__ __volatile__("wfi");
+    }
+}
+#endif
+
 // --------------------------------------------------------------------------------------------------
 // Handlers for each state in the state machine
 //
