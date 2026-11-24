@@ -1,3 +1,25 @@
+# YMODEM with SPI Support 
+
+All commands automatically target either CoreSPI or MSS SPI based on your board's CONFIG_SPI_FLASH_BACKEND selection:   
+spi_flash_mss.c+ 2
+
+  ##   Download via UART YMODEM and flash (defaults to 0x400 if offset is omitted):
+    
+    `>> YMODEM SPI 0x400`
+
+  ##  Program a payload already staged in DDR (0x80000000) to SPI flash:
+    
+    `>> SPI WRITE 0x80000000 0x400 0x12000`
+
+  ## Verify detected flash device (CoreSPI or MSS SPI):
+    
+
+  ` >> SPI ID`
+
+
+
+
+
 # Hart Software Services (HSS)
 
 The Microchip Hart Software Services (HSS) serves as the zero-stage bootloader and system controller for PolarFire® SoC FPGAs. It executes on the E51 monitor core to configure clocks, train DDR memory, release application U54 harts, and load boot payloads (U-Boot, Linux, or bare-metal binaries).
