@@ -63,6 +63,31 @@
 static void tinyCLI_NetBoot_(void);
 #endif
 
+
+#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+#    include "ymodem.h"
+#    ifndef CONFIG_YMODEM_DDR_DEST_ADDR
+#        ifdef CONFIG_NETBOOT_DDR_DEST_ADDR
+#            define CONFIG_YMODEM_DDR_DEST_ADDR CONFIG_NETBOOT_DDR_DEST_ADDR
+#        else
+#            define CONFIG_YMODEM_DDR_DEST_ADDR 0x80000000UL
+#        endif
+#    endif
+#    ifndef CONFIG_YMODEM_MAX_PAYLOAD_SIZE
+#        define CONFIG_YMODEM_MAX_PAYLOAD_SIZE (32u * 1024u * 1024u)
+#    endif
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#    include "services/spi/spi_flash.h"
+#    ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
+#        define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
+#    endif
+#endif
+
+
+
+
 #if IS_ENABLED(CONFIG_SERVICE_USBDMSC) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
 #    include "usbdmsc_service.h"
 #endif
@@ -263,6 +288,10 @@ enum CmdId {
     CMD_NETBOOT_EMMC,
     CMD_NETBOOT_QSPI,
     CMD_NETBOOT_SPI,
+    CMD_SPI_WRITE,
+    CMD_SPI_ID,
+    CMD_YMODEM_SPI,
+    
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -1200,13 +1229,54 @@ static void tinyCLI_UnsupportedBootMechanism_(char const * const pName)
     HSS_BootListStorageProviders();
 }
 
+
+
 #if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+static void tinyCLI_YModem_SPI_(void)
+{
+    uint32_t spi_offset = (uint32_t)CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET;
+    if (argc_tokenCount > 2u) {
+        spi_offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[2]);
+    }
+
+    uint8_t * const ddr_buf = (uint8_t *)CONFIG_YMODEM_DDR_DEST_ADDR;
+    mHSS_PRINTF("\n[YMODEM] Ready to receive payload into 0x%08lx and flash at SPI offset 0x%x...\n",
+                (unsigned long)CONFIG_YMODEM_DDR_DEST_ADDR, spi_offset);
+
+    const size_t rx_bytes = ymodem_receive(ddr_buf, CONFIG_YMODEM_MAX_PAYLOAD_SIZE);
+    if (rx_bytes == 0u) {
+        mHSS_PRINTF("[YMODEM] Transfer failed or aborted; SPI flash untouched.\n");
+        return;
+    }
+
+    (void)spi_flash_write_payload(spi_offset, (uintptr_t)ddr_buf, rx_bytes);
+}
+
+static const struct tinycli_cmd ymodemCmds[] = {
+    { CMD_YMODEM_SPI, "SPI", "Receive payload via YMODEM and write to SPI Flash: YMODEM SPI [offset]", tinyCLI_YModem_SPI_ },
+};
+#endif
+
 static void tinyCLI_YModem_(void)
 {
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+    if (argc_tokenCount > 1u) {
+        if (!dispatch_command_(ymodemCmds, ARRAY_SIZE(ymodemCmds), 1u)) {
+            display_help_(ymodemCmds, ARRAY_SIZE(ymodemCmds), 1u);
+        }
+        return;
+    }
+#endif
+
     void hss_loader_ymodem_loop(void);
     hss_loader_ymodem_loop();
 }
 #endif
+
+
+
+
 
 #if IS_ENABLED(CONFIG_SERVICE_SCRUB)
 static void tinyCLI_Scrub_(void)
@@ -1251,14 +1321,59 @@ static void tinyCLI_Payload_(void)
 #endif
 }
 
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+static void tinyCLI_SPI_Write_(void)
+{
+    if (argc_tokenCount < 5u) {
+        mHSS_PUTS("Usage: SPI WRITE <ddr_addr> <spi_offset> <length_bytes>\n");
+        return;
+    }
+
+    const uintptr_t src_addr  = (uintptr_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[2]);
+    const uint32_t spi_offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[3]);
+    const size_t length       = (size_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[4]);
+
+    (void)spi_flash_write_payload(spi_offset, src_addr, length);
+}
+
+static void tinyCLI_SPI_Id_(void)
+{
+    spi_flash_init();
+    const struct spi_flash_info *info = spi_flash_get_info();
+    if (info && info->mfr_id != 0x00u && info->mfr_id != 0xFFu) {
+        mHSS_PRINTF("[SPI-FLASH] %s (MFR: 0x%02X, DEV: 0x%04X, 4-Byte Addr: %s)\n",
+                    info->name, info->mfr_id, info->device_id,
+                    info->needs_4byte_addr ? "Yes" : "No");
+    } else {
+        mHSS_PRINTF("[SPI-FLASH] No SPI flash detected.\n");
+    }
+}
+
+static const struct tinycli_cmd spiCmds[] = {
+    { CMD_SPI_WRITE, "WRITE", "Write DDR payload to SPI Flash: SPI WRITE <ddr_addr> <offset> <len>", tinyCLI_SPI_Write_ },
+    { CMD_SPI_ID,    "ID",    "Detect and print active SPI Flash JEDEC info",                    tinyCLI_SPI_Id_ },
+};
+#endif
+
 static void tinyCLI_SPI_(void)
 {
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+    if (argc_tokenCount > 1u) {
+        if (!dispatch_command_(spiCmds, ARRAY_SIZE(spiCmds), 1u)) {
+            display_help_(spiCmds, ARRAY_SIZE(spiCmds), 1u);
+        }
+        return;
+    }
+#endif
+
 #if defined(CONFIG_SERVICE_SPI)
     HSS_BootSelectSPI();
 #else
     tinyCLI_UnsupportedBootMechanism_("SPI");
 #endif
 }
+
 
 static void tinyCLI_SNVM_(void)
 {
