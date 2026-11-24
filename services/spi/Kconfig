@@ -1,58 +1,30 @@
-config SERVICE_SPI
-	bool "Boot from System Controller SPI flash support"
-	default n
-	help
-	  This feature enables booting from a payload stored in the SPI flash
-	  connected to the PolarFire SoC System Controller.
-
-	  If you do not know what to do here, say Y.
-
-config SERVICE_SPI_FLASH
-	bool "SPI Flash Programming Support (NETBOOT SPI / SERIALBOOT)"
-	default y if SERVICE_SPI || SERVICE_NETBOOT || SERVICE_SERIALBOOT
-	help
-	  Enables external SPI NOR flash erase, program, and verification
-	  support for CLI commands (such as NETBOOT SPI and SERIALBOOT).
-
-if SERVICE_SPI_FLASH
-
 choice
-	prompt "SPI Flash Controller Backend"
-	default SPI_FLASH_CORESPI if BOARD_MPFS_ICICLE_KIT
-	default SPI_FLASH_MSS_SPI if BOARD_MPFS_DISCO_KIT
-	default SPI_FLASH_CORESPI
-
-config SPI_FLASH_CORESPI
-	bool "FPGA Fabric CoreSPI (Board BSP hooks in board_spi.c)"
+	prompt "SPI Flash Boot Support"
+	optional
 	help
-	  Routes SPI flash transactions through a fabric CoreSPI IP block
-	  implemented in boards/<board>/board_spi.c (used on Icicle Kit).
+	  Select the SPI flash controller used for booting an HSS payload image.
+	  System Controller SPI (SC_SPI) and Board/MSS SPI are mutually exclusive;
+	  selecting one automatically disables the other.
 
-config SPI_FLASH_MSS_SPI
-	bool "MSS SPI Peripheral (MPFS HAL MSS_SPI driver)"
+config SERVICE_SPI
+	bool "Boot from System Controller SPI flash support (SC_SPI)"
 	help
-	  Routes SPI flash transactions through the hardened MSS SPI0 or
-	  MSS SPI1 controller (used on Discovery Kit mikroBUS / expansion).
+	  Enables booting from a payload stored in the dedicated SPI flash
+	  connected to the PolarFire SoC System Controller (via MSS_SYS_spi_copy).
+
+config SERVICE_MSS_SPI_BOOT
+	bool "Boot from MSS / Board SPI flash support (board_spi.c)"
+	select SERVICE_SPI_FLASH
+	help
+	  Enables booting from an external SPI NOR flash connected to the
+	  board SPI controller (boards/<board>/board_spi.c) at offset
+	  CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET (default 0x400).
 
 endchoice
 
-if SPI_FLASH_MSS_SPI
-
-config SPI_FLASH_MSS_SPI_INSTANCE
-	int "MSS SPI Controller Instance (0 = SPI0, 1 = SPI1)"
-	range 0 1
-	default 0
-
-config SPI_FLASH_MSS_SPI_SLAVE
-	int "MSS SPI Slave Select Line (0..3)"
-	range 0 3
-	default 0
-
-config SPI_FLASH_MSS_SPI_CLK_DIV
-	int "MSS SPI Clock Divider (even value 2..512)"
-	range 2 512
-	default 16
-
-endif # SPI_FLASH_MSS_SPI
-
-endif # SERVICE_SPI_FLASH
+config SERVICE_SPI_FLASH
+	bool "SPI Flash Programming Support (YMODEM SPI)"
+	default y if SERVICE_SPI || SERVICE_MSS_SPI_BOOT || SERVICE_NETBOOT || SERVICE_SERIALBOOT
+	help
+	  Enables external SPI NOR flash erase, program, and verification
+	  support via boards/<board>/board_spi.c.
