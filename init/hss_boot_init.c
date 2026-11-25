@@ -61,6 +61,11 @@
 #  include "gpt.h"
 #endif
 
+#if (SPI_FLASH_BOOT_ENABLED)
+#  include "mss_sys_services.h"
+#endif
+
+
 #include "hss_state_machine.h"
 #include "hss_debug.h"
 #include "hss_perfctr.h"
@@ -191,34 +196,31 @@ static struct HSS_Storage snvmStorage_ = {
 };
 #endif
 
-#define HAS_LOCAL_BOOT_STORAGE (IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM) || \
-    IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI) || \
-    IS_ENABLED(CONFIG_SERVICE_MSS_SPI_BOOT) || \
-    IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_BOOT_USE_PAYLOAD))
 
-#if HAS_LOCAL_BOOT_STORAGE
+
 static struct HSS_Storage *pStorages[] =
 {
 #if IS_ENABLED(CONFIG_SERVICE_BOOT_SNVM)
-	&snvmStorage_,
+    &snvmStorage_,
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_QSPI)
-	&qspiStorage_,
+    &qspiStorage_,
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SPI)
-	&spiStorage_,
+    &spiStorage_,
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_MSS_SPI_BOOT)
-	&mssSpiStorage_,
+    &mssSpiStorage_,
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_MMC)
-	&mmcStorage_,
+    &mmcStorage_,
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_BOOT_USE_PAYLOAD)
-	&payloadStorage_,
+    &payloadStorage_,
 #endif
 };
-#endif
+
+
 
 static struct HSS_Storage *pDefaultStorage = NULL;
 
@@ -232,35 +234,28 @@ struct HSS_BootImage bootImage __attribute__((aligned(8)));
 #    error Unable to determine boot mechanism
 #endif
 
-static struct HSS_Storage *getDefaultStorage_(void)
-{
-    struct HSS_Storage *pResult = pDefaultStorage;
-
-#if HAS_LOCAL_BOOT_STORAGE
-    if (!pResult) {
-        pResult = pStorages[0];
-    }
-#endif
-
-    return pResult;
-}
 
 struct HSS_Storage *HSS_BootGetActiveStorage(void);
 struct HSS_Storage *HSS_BootGetActiveStorage(void)
 {
-    return getDefaultStorage_();
+    struct HSS_Storage *pResult = pDefaultStorage;
+
+    if (!pResult) {
+        pResult = pStorages[0];
+    }
+
+    return pResult;
 }
+
 
 void HSS_BootListStorageProviders(void)
 {
-#if HAS_LOCAL_BOOT_STORAGE
+
     for (uint32_t i = 0; i < ARRAY_SIZE(pStorages); i++) {
         mHSS_DEBUG_PRINTF_EX(" - %s\n", pStorages[i]->name);
     }
-#else
-    mHSS_DEBUG_PRINTF_EX(" - None (DDR SerialBoot/Netboot only)\n");
-#endif
 }
+
 
 void HSS_BootHarts(void)
 {
@@ -295,7 +290,6 @@ bool HSS_BootInit(void)
             result = tryBootFunction_(pDefaultStorage, pDefaultStorage->getBootImage);
         }
     } else {
-#if HAS_LOCAL_BOOT_STORAGE
         for (int i = 0; i < ARRAY_SIZE(pStorages); i++) {
             mHSS_DEBUG_PRINTF(LOG_NORMAL, "Trying to get boot image via %s ...\n", pStorages[i]->name);
 
@@ -310,48 +304,14 @@ bool HSS_BootInit(void)
                 if (result) { break; }
             }
         }
-#else
-        result = false;
-#endif
     }
 
     HSS_PerfCtr_Lap(perf_ctr_index);
-
-    #if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
-    /* If all local media boot attempts failed, fall back to Netboot */
-        if (!result) {
-            mHSS_PRINTF("\n[BOOT] Local media boot failed. Initiating automatic Netboot fallback...\n");
-
-            size_t bytes_read = 0;
-
-            #ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
-            #define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
-            #endif
-
-            #ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
-            #define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
-            #endif
-
-            netboot_status_t status = NETBOOT_Service_FetchImage(
-                0, /* 0 triggers auto-discovery (Option 66 / siaddr / Kconfig fallback) */
-                CONFIG_NETBOOT_DEFAULT_FILENAME,
-                (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
-                &bytes_read
-            );
-
-            if (status == NETBOOT_STATUS_OK) {
-                mHSS_PRINTF("[BOOT] Netboot download complete (%lu bytes).\n", (unsigned long)bytes_read);
-                netboot_jump((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR);
-                result = false; /* Keeps Hart 0 in TinyCLI while U54 application runs */
-            } else {
-                mHSS_PRINTF("[BOOT] Netboot fallback failed with error code: %d\n", status);
-            }
-        }
-    #endif
 #endif
 
     return result;
 }
+
 
 #if IS_ENABLED(CONFIG_SERVICE_BOOT)
 bool tryBootFunction_(struct HSS_Storage *pStorage, HSS_GetBootImageFnPtr_t const bootImageFunction)
@@ -476,8 +436,14 @@ static bool getBootImageFromMMC_(struct HSS_Storage *pStorage, struct HSS_BootIm
 
     if (!result) {
         mHSS_DEBUG_PRINTF(LOG_WARN, "GPT_PartitionIdToLBAOffset() failed - using offset %lu\n", srcLBAOffset);
+    } else {
+        //mHSS_DEBUG_PRINTF(LOG_WARN, "GPT_PartitionIdToLBAOffset() returned %lu\n", srcLBAOffset);
     }
 #endif
+
+
+    // Even if we have GPT enabled and it fails to find a GPT parttion, we'll still
+    // try to boot
 
     {
         mHSS_DEBUG_PRINTF(LOG_NORMAL, "Attempting to read image header (%d bytes) ...\n",
@@ -654,12 +620,12 @@ void HSS_BootSelectPayload(void)
 /* --------------------------------------------------------------------------
  * System Controller SPI Flash Boot (CONFIG_SERVICE_SPI -> MSS_SYS_spi_copy)
  * -------------------------------------------------------------------------- */
-#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_SPI) && (SPI_FLASH_BOOT_ENABLED)
+#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_SPI)
 static bool spiFlashReadBlock_(void *dst, size_t offs, size_t count) {
    int retval = MSS_SYS_spi_copy((uintptr_t)dst, offs, count, /* options */ 3, /* mb_offset */ 0);
 
    if (retval) {
-        mHSS_DEBUG_PRINTF(LOG_ERROR, "Failed to read 0x%lx bytes from System Controller SPI flash @0x%lx (error code %d)!\n", count, offs, retval);
+        mHSS_DEBUG_PRINTF(LOG_ERROR, "Failed to read 0x%lx bytes from SPI flash @0x%lx (error code %d)!\n", count, offs, retval);
    }
 
    return (retval == 0);
@@ -670,7 +636,7 @@ static bool getBootImageFromSpiFlash_(struct HSS_Storage *pStorage, struct HSS_B
     bool result = false;
     (void)pStorage;
 
-#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_SPI) && (SPI_FLASH_BOOT_ENABLED)
+#if IS_ENABLED(CONFIG_SERVICE_BOOT) && IS_ENABLED(CONFIG_SERVICE_SPI) 
 
     assert(ppBootImage);
 
@@ -895,7 +861,7 @@ bool HSS_Storage_Init(void)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = getDefaultStorage_();
+    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
     assert(pStorage);
 
     if (pStorage->init) {
@@ -910,7 +876,7 @@ bool HSS_Storage_ReadBlock(void *pDest, size_t srcOffset, size_t byteCount)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = getDefaultStorage_();
+    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
     assert(pStorage);
 
     if (pStorage->readBlock) {
@@ -919,7 +885,9 @@ bool HSS_Storage_ReadBlock(void *pDest, size_t srcOffset, size_t byteCount)
     return result;
 }
 
-static void hss_flush_ddr_cache_(const void *pAddr, size_t byteCount)
+
+/* Helper Function to flush the DDR cache  if needed */
+static void __attribute__((unused)) hss_flush_ddr_cache_(const void *pAddr, size_t byteCount)
 {
     uintptr_t addr = (uintptr_t)pAddr;
 
@@ -948,11 +916,10 @@ bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
 {
     bool result = true;
 
-    struct HSS_Storage *pStorage = getDefaultStorage_();
+    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
     assert(pStorage);
 
     if (pStorage->writeBlock) {
-        hss_flush_ddr_cache_(pSrc, byteCount);
         result = pStorage->writeBlock(dstOffset, pSrc, byteCount);
     }
     return result;
@@ -960,7 +927,7 @@ bool HSS_Storage_WriteBlock(size_t dstOffset, void *pSrc, size_t byteCount)
 
 void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *pBlockCount)
 {
-    struct HSS_Storage *pStorage = getDefaultStorage_();
+    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
     assert(pStorage);
 
     if (pStorage->getInfo) {
@@ -971,7 +938,7 @@ void HSS_Storage_GetInfo(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *p
 
 void HSS_Storage_FlushWriteBuffer(void)
 {
-    struct HSS_Storage *pStorage = getDefaultStorage_();
+    struct HSS_Storage *pStorage = pDefaultStorage ? pDefaultStorage : pStorages[0];
     assert(pStorage);
 
     if (pStorage->flushWriteBuffer) {
