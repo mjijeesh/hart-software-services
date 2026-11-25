@@ -1,57 +1,25 @@
-# YMODEM with SPI Support 
+# Custom Hart Software Services (HSS)
 
-All commands automatically target either CoreSPI or MSS SPI based on your board's CONFIG_SPI_FLASH_BACKEND selection:   
-spi_flash_mss.c+ 2
+This is a custom version of Microchip's **Hart Software Services (HSS)** for PolarFire® SoC FPGAs, adding support for:
 
-  ##   Download via UART YMODEM and flash (defaults to 0x400 if offset is omitted):
-    
-    `>> YMODEM SPI 0x400`
+1. **Serialboot** (SFL payload transfer over UART to DDR or non-volatile storage)
+2. **SPI Flash Memory Programming & Boot** (writing and booting payloads via SPI flash)
+3. **Netboot** (downloading and booting/flashing payloads over Ethernet via DHCP and TFTP)
 
-  ##  Program a payload already staged in DDR (0x80000000) to SPI flash:
-    
-    `>> SPI WRITE 0x80000000 0x400 0x12000`
+## 1. Architecture Overview
 
-  ## Verify detected flash device (CoreSPI or MSS SPI):
-    
+HSS acts as the zero-stage bootloader and system controller on PolarFire SoC. Running on the E51 monitor core, it configures clocks, trains DDR memory, manages boot media and storage services, and releases U54 application harts to run U-Boot, Linux, or bare-metal payloads.
 
-  ` >> SPI ID`
+On PolarFire SoC, HSS consists of two main parts:
 
-
-
-
-
-# Hart Software Services (HSS)
-
-The Microchip Hart Software Services (HSS) serves as the zero-stage bootloader and system controller for PolarFire® SoC FPGAs. It executes on the E51 monitor core to configure clocks, train DDR memory, release application U54 harts, and load boot payloads (U-Boot, Linux, or bare-metal binaries).
-
-On PolarFire SoC, HSS is comprised of two portions:
-1. A superloop monitor running on the E51 minion processor, which receives requests from individual U54 application processors to perform services on their behalf.
-2. A Machine-Mode software interrupt trap handler, which allows the E51 to send messages to the U54s and coordinate cross-hart events.
-
----
-
-## 1. Latest Updates & Architectural Enhancements
-
-* **L2 Cache-to-DMA Coherency (`init/hss_boot_init.c`):**
-  * Centralized hardware cache flushing inside `HSS_Storage_WriteBlock()`. 
-  * Automatically flushes dirty L2 cache lines from `SEG0_0` (`0x80000000`) and `SEG0_1` to physical DDR before initiating ADMA/SDMA peripheral writes. This ensures payloads downloaded via TFTP (`NETBOOT`) or UART (`SERIALBOOT`) are written intact to eMMC/SD Cards without stale memory corruption.
-* **Transport-Agnostic Payload Decoder (`services/boot/hss_boot_service.c`):**
-  * Extracted `HSS_Boot_DecodeAndBootDDR()` into the core boot service so `NETBOOT` and `SERIALBOOT` share a single payload loader with zero cross-service dependency.
-  * Automatically detects structured HSS Boot Images (`0xb007c0de` and compressed `0xc08b8355`) versus raw flat binaries across both Ethernet TFTP and UART SFL transfers.
-  * Safely stages/decompresses container headers to `0x1010000000` (256 MiB into DDR-Hi) before unpacking segments into `0x80000000`, preventing chunk-table overwrites while remaining within physical RAM.
-* **Board-Abstracted SFL UART Framing (`bsp_serialboot_uart_tx`):**
-  * Added a weak BSP hook in `services/serialboot/` with board-specific overrides in `boards/<board>/hss_uart_init.c` (`MMUART0` on Icicle Kit, `MMUART1` on Discovery Kit).
-  * Transmits raw SFL magic frames (`sL5DdSMmkekro\n`) and single-byte ACKs without `\r\n` newline expansion.
-* **Unified Multi-Board SPI Flash Driver (`services/spi/spi_flash.c`):**
-  * Supports FPGA fabric **CoreSPI** (Icicle Kit, Micron MT25Q) and hardened **MSS SPI** (Discovery Kit, Microchip SST25WF) under `CONFIG_SERVICE_SPI_FLASH`, adding `FLASHID` and `FLASHBOOT` CLI commands.
-* **Detailed TinyCLI Help Output (`services/tinycli/tinycli_api.c`):**
-  * Updated `display_help_()` to format top-level and subcommand help tables with aligned command names and full usage descriptions.
+1. A superloop monitor running on the E51 minion processor that services requests from U54 application cores.
+2. A Machine-Mode software interrupt trap handler that lets the E51 message U54 harts and coordinate cross-hart events.
 
 ---
 
 ## 2. Automated Boot Cascade Architecture
 
-When HSS boots without a manual CLI override, `HSS_BootInit()` evaluates boot media sequentially and falls back to Ethernet TFTP staging if all local non-volatile media fail to provide a valid payload:
+When HSS boots without a manual CLI override, `HSS_BootInit()` evaluates boot media sequentially and falls back to Ethernet TFTP staging if local non-volatile media do not yield a valid payload:
 
 ```text
 [Power-On / Cold Reset]
@@ -75,55 +43,275 @@ When HSS boots without a manual CLI override, `HSS_BootInit()` evaluates boot me
 └─────────────────────────────────────────┘
 ```
 
-**Note:** HSS prioritizes MMC/SD over SPI Flash, ensuring updates flashed to removable media take precedence over factory images in SPI flash.
+**Note:** HSS prioritizes MMC/SD over SPI Flash so images flashed to removable media take precedence over SPI flash payloads.
 
-## **3\. Boot & Flash via SerialBoot (UART SFL)**
+---
 
-The SERIALBOOT service downloads payloads over the console UART using the Serial Flash Loader (SFL) protocol (mpfs-terminal.py). Payloads can be decoded and executed directly in DDR or permanently flashed to eMMC, SD Cards, QSPI, or SPI Flash.
+## 3. HSS TinyCLI Help Menu
 
-### **SerialBoot & SPI Flash Command Reference**
+Use the `help` command at the TinyCLI prompt to list available commands:
 
-| Command | Target Media | Description |
-| :---- | :---- | :---- |
-| serialboot \[addr\] | DDR RAM | Receives binary via UART into DDR (default 0x80000000), decodes payload, and boots U54 cores. |
-| serialboot emmc | Onboard eMMC | Receives payload to DDR, writes to the eMMC GPT boot partition (or LBA 0), and verifies. |
-| serialboot sd | microSD Card | Receives payload to DDR, writes to the SD Card GPT boot partition (or LBA 0), and verifies. |
-| serialboot spi \[offset\] | SPI Flash | Receives payload to DDR, preserves 0x000–0x3FF prefix, erases, programs at 0x400, and verifies. |
-| serialboot qspi | QSPI Flash | Receives payload and flashes to MSS QSPI flash (for Discovery Kit / supported boards). |
-| flashid | SPI Flash | Reads and prints the JEDEC ID of the connected SPI Flash (CoreSPI or MSS SPI). |
-| flashboot \[offset\] | SPI Flash | Reads an HSS payload image from SPI Flash (default 0x400) into DDR, decodes, and boots U54s. |
+```text
+>> help
 
-### **Usage with mpfs-terminal.py**
+Supported commands:
+  YMODEM         - Run YMODEM utility to download an image to DDR.
+  BOOT           - Quit TinyCLI and return to regular boot process.
+  RESET          - Reset PolarFire SoC.
+  HELP           - Display command summary / command help information.
+  VERSION        - Display system version information.
+  UPTIME         - Display uptime information.
+  DEBUG          - Display debug information.
+  MEMTEST        - Full DDR memory test.
+  QSPI           - Select boot via QSPI.
+  EMMC           - Select boot via eMMC.
+  MMC            - Select boot via SDCARD/eMMC.
+  SDCARD         - Select boot via SDCARD.
+  PAYLOAD        - Select boot via payload.
+  SPI            - Select boot via SPI.
+  SNVM           - Select boot via sNVM.
+  RESUME         - Resume after suspending
+  ECC            - Dump ECC stats.
+  SERIALBOOT     - Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]
+  FLASHID        - Read SPI Flash JEDEC ID: FLASHID
+  FLASHBOOT      - Boot image from SPI Flash: FLASHBOOT <spi_offset>
+  NETBOOT        - Download and run/flash payload via TFTP: NETBOOT [sd|emmc|spi|qspi] [server_ip] [filename] [addr/offset]
 
-Bash
-
+>>
 ```
-# Load and decode/boot payload in DDR (type 'serialboot' at HSS prompt)
-python3 mpfs-terminal.py /dev/ttyUSB0 --kernel payload.bin
 
-# Flash payload to SPI Flash at offset 0x400 (type 'serialboot' or 'serialboot spi')
-python3 mpfs-terminal.py /dev/ttyUSB0 --kernel payload.bin --flash --kernel-adr 0x400
+You can also pass `help` to subcommand-capable commands such as `serialboot` or `netboot`:
+
+```text
+>> serialboot help
+
+Supported subcommands:
+  SD             - Receive binary over SFL and flash to SD Card: SERIALBOOT SD
+  EMMC           - Receive binary over SFL and flash to eMMC: SERIALBOOT EMMC
+  SPI            - Receive binary over SFL and flash to SPI Flash: SERIALBOOT SPI [offset]
+
+Or run without subcommand to load directly to DDR and execute:
+  SERIALBOOT [load_addr]
 ```
 
-## **4\. Boot & Flash via Netboot (Ethernet / TFTP)**
+---
 
-The NETBOOT service downloads payloads over Ethernet via DHCP and TFTP and passes downloaded images through HSS\_Boot\_DecodeAndBootDDR(), supporting both hss-payload-generator images and raw flat binaries.
+## 4. Serialboot
+
+Serialboot downloads a payload image into DDR memory over UART using the SFL protocol. Once transferred, the image can either execute directly from DDR or be written to non-volatile storage (SD card, eMMC, QSPI, or SPI flash).
+
+Use `tools/mpfs-terminal.py` to handle the host-side SFL transfer:
+
+* `/dev/ttyUSB0` / `COM9`: HSS UART port on Linux or Windows
+* `--kernel`: Target application payload binary to upload (omitting `--kernel` runs `mpfs-terminal.py` as a plain UART terminal)
+
+### 4.1 Download and Execute from DDR
+
+Build your target application for `ddr-release` (targeting DDR base address `0x80000000` by default) and start `mpfs-terminal.py`:
+
+Linux:
+
+```sh
+python tools/mpfs-terminal.py /dev/ttyUSB0 --kernel build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin
+```
+
+Windows:
+
+```sh
+python tools/mpfs-terminal.py COM9 --kernel build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin
+```
+
+Reset the board, press a key in the terminal to halt auto-boot and enter TinyCLI, then run `serialboot`:
+
+```text
+>> serialboot
+
+
+[SERIALBOOT] Staging buffer @ 0x0080000000. Waiting for SFL host...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Uploading build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin (85936 bytes) -> 0x80000000...
+|====================| 100.0% (85936/85936 B)
+[MPFS-TERM] Transfer Complete (7.7 KB/s).
+[MPFS-TERM] Sending JUMP Command to boot application...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[SERIALBOOT] Transfer complete (85936 bytes received, host base: 0x80000000).
+[PAYLOAD] Detected HSS Boot Image header (magic: 0xb007c0de).
+[PAYLOAD] Set Name : "PolarFire-SoC-HSS::mpfs-net-app"
+[PAYLOAD] Image Len: 85936 bytes
+[PAYLOAD]   Chunk[0]: Hart=1  Load=0x0000000790  Exec=0x0080000000  Size=80272 bytes
+[PAYLOAD]   Chunk[1]: Hart=1  Load=0x0000014120  Exec=0x0080013990  Size=32 bytes
+[PAYLOAD]   Chunk[2]: Hart=1  Load=0x0000014140  Exec=0x00800139b0  Size=3696 bytes
+[PAYLOAD] Registering boot image and dispatching U54 harts...
+```
+
+### 4.2 Download and Write to SPI Flash
+
+Launch `mpfs-terminal.py` with your payload binary, halt boot at the TinyCLI prompt, and run `serialboot spi` to program the default SPI flash boot offset (`0x400`):
+
+```sh
+python tools/mpfs-terminal.py /dev/ttyUSB0 --kernel build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin
+```
+
+```text
+>> serialboot spi
+
+[SERIALBOOT] Staging buffer @ 0x0080000000. Waiting for SFL host...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Uploading build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin (85936 bytes) -> 0x80000000...
+|====================| 100.0% (85936/85936 B)
+[MPFS-TERM] Transfer Complete (7.7 KB/s).
+[MPFS-TERM] Sending JUMP Command to boot application...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[SERIALBOOT] Transfer complete (85936 bytes received, host base: 0x80000000).
+[SPI-FLASH] Detected Microchip SST25WF (MFR: 0x62, DEV: 0x0613)
+[SPI-FLASH] Backing up 1024 prefix bytes at 0x0...
+[SPI-FLASH] Erasing 64 KiB sectors covering 0x400 (85936 bytes)...
+[SPI-FLASH] Programming 85936 bytes to 0x400...
+[SPI-FLASH] SUCCESS: Payload verified in SPI Flash @ 0x400! Reset board to boot.
+```
+
+To flash to a custom SPI offset (for example, `0x1000`), pass the offset argument:
+
+```text
+>> serialboot spi 0x1000
+
+[SERIALBOOT] Staging buffer @ 0x0080000000. Waiting for SFL host...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Uploading build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin (85936 bytes) -> 0x80000000...
+|====================| 100.0% (85936/85936 B)
+[MPFS-TERM] Transfer Complete (7.7 KB/s).
+[MPFS-TERM] Sending JUMP Command to boot application...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[SERIALBOOT] Transfer complete (85936 bytes received, host base: 0x80000000).
+[SPI-FLASH] Detected Microchip SST25WF (MFR: 0x62, DEV: 0x0613)
+[SPI-FLASH] Backing up 4096 prefix bytes at 0x0...
+[SPI-FLASH] Erasing 64 KiB sectors covering 0x1000 (85936 bytes)...
+[SPI-FLASH] Programming 85936 bytes to 0x1000...
+[SPI-FLASH] SUCCESS: Payload verified in SPI Flash @ 0x1000! 
+Reset board to boot.
+```
+
+Automatic booting checks the default offset (`0x400`). To boot a payload stored at a custom offset without resetting, run `flashboot <offset>`:
+
+```text
+>> flashboot 0x1000
+
+
+[FLASHBOOT] Reading 85936 bytes from SPI @ 0x1000 to DDR @ 0x0080000000...
+[PAYLOAD] Detected HSS Boot Image header (magic: 0xb007c0de).
+[PAYLOAD] Set Name : "PolarFire-SoC-HSS::mpfs-net-app"
+[PAYLOAD] Image Len: 85936 bytes
+[PAYLOAD]   Chunk[0]: Hart=1  Load=0x0000000790  Exec=0x0080000000  Size=80272 bytes
+[PAYLOAD]   Chunk[1]: Hart=1  Load=0x0000014120  Exec=0x0080013990  Size=32 bytes
+[PAYLOAD]   Chunk[2]: Hart=1  Load=0x0000014140  Exec=0x00800139b0  Size=3696 bytes
+[PAYLOAD] Registering boot image and dispatching U54 harts...
+[33.909924] Boot image set name: "PolarFire-SoC-HSS::mpfs-net-app"
+[33.917658] healthmon_service :: [init] -> [monitoring]
+[33.924628] boot_service(u54_1):: BOOT_FLAG_SKIP_OPENSBI found
+[33.932267] boot_service(u54_1) :: [Init] -> [SetupPMP]
+[33.939237] boot_service(u54_2):: BOOT_FLAG_SKIP_OPENSBI found
+[33.946875] boot_service(u54_2) :: [Init] -> [SetupPMP]
+[33.953845] boot_service(u54_3):: BOOT_FLAG_SKIP_OPENSBI found
+[33.961484] boot_service(u54_3) :: [Init] -> [SetupPMP]
+[33.968454] boot_service(u54_4):: BOOT_FLAG_SKIP_OPENSBI found
+[33.976092] boot_service(u54_4) :: [Init] -> [SetupPMP]
+```
+
+### 4.3 Download and Write to SD Card or eMMC
+
+Use `serialboot sd` or `serialboot emmc` to stage a payload into DDR and write it to removable or onboard MMC storage:
+
+```text
+>> serialboot sd
+
+[SERIALBOOT] Staging buffer @ 0x0080000000. Waiting for SFL host...
+sL5DdSMmkekro
+
+[MPFS-TERM] Magic trigger matched! Replying with handshake ACK...
+[MPFS-TERM] Uploading build/mpfs-disco-kit/ddr-release/mpfs-net-app-payload.bin (85936 bytes) -> 0x80000000...
+|====================| 100.0% (85936/85936 B)
+[MPFS-TERM] Transfer Complete (7.7 KB/s).
+[MPFS-TERM] Sending JUMP Command to boot application...
+[MPFS-TERM] Terminal active. Continuing console output...
+
+
+[SERIALBOOT] Transfer complete (85936 bytes received, host base: 0x80000000).
+[FLASH] Selecting SD Card interface...
+[329.198838] Selecting SDCARD as boot source ...
+[329.204853] Attempting to select SDCARD ... Passed
+[329.379295] Attempting to select SDCARD ... Passed
+[329.408608] GPT signature not as expected
+[FLASH] Writing 85936 bytes (aligned: 86016) to SD Card offset 0x0...
+[FLASH] SUCCESS: Payload verified on SD Card! 
+Reset board to boot.
+```
+
+---
+
+## 5. Using YMODEM with SPI Flash Support
+
+You can also transfer a payload into DDR over UART via YMODEM and write it directly to SPI flash (or other supported targets). Commands automatically use the SPI flash backend configured in `CONFIG_SPI_FLASH_BACKEND`:
+
+1. Connect a serial terminal (such as Tera Term) to the HSS UART console.
+2. Reset the board and press a key to stop auto-boot and enter `TinyCLI`.
+3. Run `ymodem spi` (or `ymodem spi 0x1000` for a custom offset):
+
+```text
+>> ymodem spi
+```
+
+4. In Tera Term, select **File -> Transfer -> YMODEM -> Send...** and choose your payload file (for example, `build/mpfs-icicle-kit/ddr-release/mpfs-netapp-dualport-payload.bin`).
+
+Once the transfer completes, HSS programs and verifies the image in SPI flash:
+
+```text
+>> ymodem spi
+
+[YMODEM] Ready to receive payload into 0x80000000 and flash at SPI offset 0x400...
+CCCCCCCCC
+
+Received 85936 bytes from mpfs-net-app-payload.bin (CRC32 is 0x0638C289)
+[SPI-FLASH] Detected Microchip SST25WF (MFR: 0x62, DEV: 0x0613)
+[SPI-FLASH] Backing up 1024 prefix bytes at 0x0...
+[SPI-FLASH] Erasing 64 KiB sectors covering 0x400 (85936 bytes)...
+[SPI-FLASH] Programming 85936 bytes to 0x400...
+[SPI-FLASH] SUCCESS: Payload verified in SPI Flash @ 0x400! 
+Reset board to boot.
+```
+
+Reset the board to boot from SPI flash, or run `flashboot` to boot immediately.
+
+---
+
+## 6. Boot and Flash via Netboot (Ethernet / TFTP)
+
+The `NETBOOT` service fetches images over Ethernet using DHCP and TFTP and passes them through `HSS_Boot_DecodeAndBootDDR()`, supporting both structured `hss-payload-generator` images and raw flat binaries:
 
 | Command | Description |
-| :---- | :---- |
-| netboot \[ip\] \[file\] \[addr\] | Downloads TFTP payload to DDR (0x80000000), decodes container if present, and boots U54 cores. |
-| netboot emmc \[ip\] \[file\] | Downloads payload via TFTP, pushes cached data to physical RAM, and flashes to onboard eMMC. |
-| netboot sd \[ip\] \[file\] | Downloads payload via TFTP, pushes cached data to physical RAM, and flashes to microSD Card. |
-| netboot spi \[ip\] \[file\] \[offset\] | Downloads payload via TFTP and flashes to SPI Flash (default offset 0x400). |
-| netboot qspi \[ip\] \[file\] | Downloads payload via TFTP and flashes to MSS QSPI Flash. |
+| :--- | :--- |
+| `netboot [ip] [file] [addr]` | Downloads a TFTP image to DDR (`0x80000000`), decodes the container if present, and boots U54 harts. |
+| `netboot emmc [ip] [file]` | Downloads an image via TFTP, flushes cached data to physical RAM, and flashes onboard eMMC. |
+| `netboot sd [ip] [file]` | Downloads an image via TFTP, flushes cached data to physical RAM, and flashes a microSD card. |
+| `netboot spi [ip] [file] [offset]` | Downloads an image via TFTP and flashes SPI flash (default offset `0x400`). |
+| `netboot qspi [ip] [file]` | Downloads an image via TFTP and flashes MSS QSPI flash. |
 
-*(All arguments in brackets are optional; omitted parameters default to DHCP auto-discovery, boot.bin, DDR 0x80000000, and SPI offset 0x400.)*
+All arguments in brackets are optional and default to DHCP auto-discovery, `boot.bin`, DDR address `0x80000000`, and SPI offset `0x400`.
 
-### **Expected Output: netboot sd**
+### Example Output: `netboot sd`
 
-Plaintext
-
-```
+```text
 >> netboot sd
 [CLI] Netboot -> SD Card programming initiated...
 ================ [NETBOOT: HARDWARE INIT] ================
@@ -136,33 +324,15 @@ Plaintext
 [FLASH] SUCCESS: Payload verified on SD Card! Reset board to boot.
 ```
 
-## **5\. Detailed TinyCLI Help Output**
+---
 
-Running help (or entering an incomplete subcommand such as serialboot help or netboot help) prints an aligned command table with descriptions:
+## 7. Payload Preparation Requirements
 
-Plaintext
+Flashing to non-volatile storage or loading multi-hart ELF segments requires an image packaged with `hss-payload-generator`. Raw flat binaries can only be executed directly from DDR.
 
-```
->> help
-Supported commands:
-  YMODEM         - Run YMODEM utility to download an image to DDR.
-  BOOT           - Quit TinyCLI and return to regular boot process.
-  RESET          - Reset PolarFire SoC.
-  HELP           - Display command summary / command help information.
-  ...
-  SERIALBOOT     - Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]
-  FLASHID        - Read SPI Flash JEDEC ID: FLASHID
-  FLASHBOOT      - Boot image from SPI Flash: FLASHBOOT <spi_offset>
-  NETBOOT        - Download and run/flash payload via TFTP: NETBOOT [sd|emmc|spi|qspi] [server_ip] [filename] [addr/offset]
-```
+Example `baremetal.yaml`:
 
-## **6\. Payload Preparation Requirements**
-
-All structured boot operations (flashing to non-volatile storage or multi-hart ELF segment loading) require an image packaged with hss-payload-generator. Raw flat binaries can only be executed directly from DDR.
-
-YAML
-
-```
+```yaml
 # baremetal.yaml
 set-name: 'PolarFire-SoC-Payload'
 hart-entry-points: {u54_1: '0x80000000'}
@@ -170,63 +340,47 @@ payloads:
   app.elf: {exec-addr: '0x80000000', owner-hart: u54_1, priv-mode: prv-m}
 ```
 
-Generate payload.bin:
+Generate `payload.bin`:
 
-Bash
-
-```
+```sh
 ./tools/hss-payload-generator/hss-payload-generator -c baremetal.yaml payload.bin
 ```
 
-## **7\. Hardware Configuration Differences & Build Instructions**
+---
+
+## 8. Hardware Differences and Build Instructions
 
 | Feature | PolarFire SoC Icicle Kit | PolarFire SoC Discovery Kit |
-| :---- | :---- | :---- |
-| **HSS Target** | mpfs-icicle-kit / mpfs-icicle-kit-es | mpfs-disco-kit |
-| **DDR Subsystem** | 2 GB LPDDR4 (32-bit data bus) | 1 GB DDR4 (DDR-Lo 32 MiB \+ DDR-Hi 888 MiB) |
-| **DDR Target Addr** | 0x103fc00000 | **0x1020000000** (Must fit in 888 MiB bounds) |
-| **Console UART** | MMUART0 (g\_mss\_uart0\_lo) | MMUART1 (g\_mss\_uart1\_lo) |
+| :--- | :--- | :--- |
+| **HSS Target** | `mpfs-icicle-kit` / `mpfs-icicle-kit-es` | `mpfs-disco-kit` |
+| **DDR Subsystem** | 2 GB LPDDR4 (32-bit data bus) | 1 GB DDR4 (DDR-Lo 32 MiB + DDR-Hi 888 MiB) |
+| **DDR Target Addr** | `0x103fc00000` | `0x1020000000` (must fit within 888 MiB bounds) |
+| **Console UART** | MMUART0 (`g_mss_uart0_lo`) | MMUART1 (`g_mss_uart1_lo`) |
 | **Primary Storage** | Onboard eMMC & MicroSD | MicroSD only (no onboard eMMC) |
 | **SPI Flash Path** | CoreSPI (FPGA Fabric, Micron MT25Q) | MSS SPI (Hardened Peripheral, Microchip SST25WF) |
 | **Ethernet PHY** | VSC8662 (Dual-Port / Cross-MAC MDIO) | VSC8221 (Single Port, GEM0) |
-| **Embedded DTB** | Supported (CONFIG\_PROVIDE\_DTB=y) | Disabled (\# CONFIG\_PROVIDE\_DTB is not set) |
+| **Embedded DTB** | Supported (`CONFIG_PROVIDE_DTB=y`) | Disabled (`# CONFIG_PROVIDE_DTB is not set`) |
 
-### **Toolchain Setup**
+### Toolchain Setup
 
-Bash
-
-```
-export PATH=/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin:\$PATH
+```sh
+export PATH=/opt/xpack-riscv-none-elf-gcc-15.2.0-1/bin:$PATH
 export FPGENPROG=/opt/microchip/Libero_SoC_v2024.1/Libero/bin64/fpgenprog
 ```
 
-### **Compiling & Programming eNVM**
+### Compiling and Programming eNVM
 
-Bash
-
-```
+```sh
 cd hart-software-services
 
-# 1. Load board default configuration (always run defconfig when switching boards)
+# 1. Load board default configuration (run defconfig whenever switching boards)
 make BOARD=mpfs-icicle-kit defconfig   # or BOARD=mpfs-disco-kit
 
-# 2. (Optional) Enable SerialBoot, Netboot, and SPI Flash drivers via menuconfig
+# 2. (Optional) Enable Serialboot, Netboot, and SPI Flash drivers via menuconfig
 make BOARD=mpfs-icicle-kit menuconfig
 
 # 3. Clean, build, and program target eNVM
-make -j\$(nproc) BOARD=mpfs-icicle-kit clean all program
+make -j$(nproc) BOARD=mpfs-icicle-kit clean all program
 ```
 
-**Tip when switching boards:** Save board-specific .config files (e.g., boards/mpfs-disco-kit/def\_config\_serial\_netboot) so switching targets preserves board-specific options such as CONFIG\_PROVIDE\_DTB, target staging addresses, and CONFIG\_SPI\_FLASH\_MSS\_SPI vs. CONFIG\_SPI\_FLASH\_CORESPI.
-
-## **8\. Contributions & Source Layout**
-
-Pull requests must include a per-commit sign-off stating agreement to the [Developer Certificate of Origin](https://developercertificate.org/).
-
-* application/ \- Main functions, U54 IPI handlers, and CRT startup  
-* boards/ \- Board-specific initializations (board\_eth.c, board\_spi.c, hss\_uart\_init.c) and Libero XML mappings  
-* envm-wrapper/ \- Decompressor routines to inflate HSS to L2-Scratchpad  
-* modules/ \- Cryptography, compression, and Secure Software Message Bus (SSMB)  
-* services/ \- HSS state machines (boot, spi, mmc, qspi, netboot, serialboot, tinycli)  
-* thirdparty/ \- OpenSBI, Miniz, Libecc, Kconfiglib
-
+**Tip when switching boards:** Save board-specific `.config` files (for example, `boards/mpfs-disco-kit/def_config_serial_netboot`) so switching targets preserves board-specific settings such as `CONFIG_PROVIDE_DTB`, staging addresses, and `CONFIG_SPI_FLASH_MSS_SPI` vs. `CONFIG_SPI_FLASH_CORESPI`.
