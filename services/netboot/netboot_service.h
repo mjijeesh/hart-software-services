@@ -30,4 +30,6 @@ uint32_t NETBOOT_ParseIP(const char *str);
 /* Writes a staged HSS payload from DDR to SD Card, eMMC, or QSPI Flash */
 bool NETBOOT_WritePayloadToStorage(uintptr_t ddr_addr, size_t byte_count, netboot_media_t media);
 
+void HSS_NetBoot_CLI(size_t argc, char * const argv[]);
+
 #endif /* NETBOOT_SERVICE_H */

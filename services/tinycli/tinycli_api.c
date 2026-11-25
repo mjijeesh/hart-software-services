@@ -49,29 +49,6 @@
 #include "mpfs_reg_map.h"
 #include "opensbi_service.h"
 
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
-#include "services/netboot/netboot_service.h"
-
-#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
-#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
-#endif
-
-#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
-#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
-#endif
-
-//static void tinyCLI_NetBoot_(void);
-#endif
-
-
-#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
-#    include "services/spi/spi_flash.h"
-#    ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
-#        define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
-#    endif
-#endif
-
-
 
 
 #if IS_ENABLED(CONFIG_SERVICE_USBDMSC) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
@@ -136,11 +113,34 @@ struct tinycli_toplevel_cmd_safe {
 /* New Additional Commands */
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
 #    include "services/serialboot/serialboot.h"
-
     static void tinyCLI_SerialBoot_(void);
-   // static void tinyCLI_FlashId_(void);
-   // static void tinyCLI_FlashBoot_(void);
+   
 #endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#    include "services/spi/spi_flash.h"
+#    ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
+#        define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
+#    endif
+#endif
+
+
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+#include "services/netboot/netboot_service.h"
+
+#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+#endif
+
+#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
+#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
+#endif
+
+static void tinyCLI_NetBoot_(void);
+#endif
+
+
 
 #if IS_ENABLED(CONFIG_SERVICE_YMODEM)
 #    include "ymodem.h"
@@ -155,10 +155,6 @@ struct tinycli_toplevel_cmd_safe {
 #        define CONFIG_YMODEM_MAX_PAYLOAD_SIZE (32u * 1024u * 1024u)
 #    endif
 #endif
-
-
-
-
 
 
 static unsigned long int tinyCLI_strtoul_wrapper_(const char *__restrict nptr);
@@ -378,8 +374,8 @@ static const struct tinycli_cmd toplevelCmds[] = {
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ },   
 #endif
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
- //   { CMD_NETBOOT, "NETBOOT", "Download and run/flash payload via TFTP: NETBOOT [sd|emmc|spi|qspi] [server_ip] [filename] [addr/offset]", tinyCLI_NetBoot_ },
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+    { CMD_NETBOOT, "NETBOOT", "Download image over network [default DDR | SPI [offset] | SD | EMMC]", tinyCLI_NetBoot_ },
 #endif
 };
 
@@ -418,15 +414,10 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, true },   
 #endif
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
     { CMD_NETBOOT, true },
 #endif
 };
-
-//_Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootFlags), "arrays toplevelCmds and topLevelCmdSafeAfterBootFlags need to be same dimension");
-
-
-
 
 
 /***********************************************************************/
@@ -1264,5 +1255,12 @@ static void tinyCLI_SPI_(void)
 static void tinyCLI_YModem_(void)
 {
     HSS_YModem_CLI(argc_tokenCount, argv_tokenArray);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+static void tinyCLI_NetBoot_(void)
+{
+    HSS_NetBoot_CLI(argc_tokenCount, argv_tokenArray);
 }
 #endif
