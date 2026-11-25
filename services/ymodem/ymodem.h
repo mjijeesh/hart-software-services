@@ -39,4 +39,6 @@ size_t ymodem_receive(uint8_t *buffer, size_t bufferSize);
 }
 #endif
 
+void HSS_YModem_CLI(size_t argc, char * const argv[]);
+
 #endif

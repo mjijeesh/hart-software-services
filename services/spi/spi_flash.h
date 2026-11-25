@@ -37,6 +37,10 @@ bool spi_flash_write_payload(uint32_t spi_offset, uintptr_t ddr_addr, size_t byt
 bool spi_flash_storage_init(void);
 bool spi_flash_storage_read_block(void *pDest, size_t srcOffset, size_t byteCount);
 void spi_flash_storage_get_info(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *pBlockCount);
+
 #endif
+
+void HSS_SPI_CLI(size_t argc, char * const argv[]);
+
 
 #endif /* HSS_SPI_FLASH_H */
