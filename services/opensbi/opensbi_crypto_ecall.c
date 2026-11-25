@@ -31,6 +31,14 @@
 #include "mss_peripherals.h"
 #include "opensbi_ecall.h"
 #include "opensbi_crypto_ecall.h"
+#include "ddr_service.h"
+
+#define mCRYPTO_PTR_VALID(ptr, type) \
+    ((ptr) != NULL \
+     && HSS_DDR_IsRangeInDDR((uintptr_t)(ptr), sizeof(type)))
+
+#define AES_MAX_KEY_SIZE	32
+#define AES_IV_SIZE		16
 
 #define AES_DIR_DECRYPT		0x00
 #define AES_DIR_ENCRYPT		0x01
@@ -67,6 +75,21 @@ static int crypto_aes_operation(const struct sbi_trap_regs *regs)
 	aes = (struct mchp_crypto_aes_req *)regs->a1;
 	flags = (uint32_t)regs->a2;
 
+	/*
+	 * All buffers come from S-mode and are handed to the crypto DMA
+	 * engine, so restrict them to DDR to stop M-mode memory being
+	 * read or overwritten on the caller's behalf.
+	 */
+	if (!mCRYPTO_PTR_VALID(aes, struct mchp_crypto_aes_req)) {
+		return SBI_EINVAL;
+	}
+	if (!mCRYPTO_PTR_VALID((void *)aes->key, uint8_t[AES_MAX_KEY_SIZE])
+	    || !mCRYPTO_PTR_VALID((void *)aes->iv, uint8_t[AES_IV_SIZE])
+	    || !HSS_DDR_IsRangeInDDR((uintptr_t)aes->src, aes->size)
+	    || !HSS_DDR_IsRangeInDDR((uintptr_t)aes->dst, aes->size)) {
+		return SBI_EINVAL;
+	}
+
 	/* AES Key Type - 128 or 192 or 256-bit */
 	aes_key_type = (flags >> 16) & MASK_8BIT;
 	/* AES Modes - ECB, CBC, CFB, OFB, CTR or GCM */
@@ -96,15 +119,59 @@ static int crypto_aes_operation(const struct sbi_trap_regs *regs)
 	return SBI_OK;
 }
 
-int sbi_ecall_crypto_handler(unsigned long extid,
+static int crypto_aes_gcm_operation(const struct sbi_trap_regs *regs)
+{
+	uint8_t aes_key_type;
+	uint8_t status;
+	uint32_t flags;
+	int err;
+	struct mchp_crypto_aes_gcm_req *gcm;
+
+	gcm = (struct mchp_crypto_aes_gcm_req *)regs->a1;
+	flags = (uint32_t)regs->a2;
+
+	/* AES Key Type - 128 or 192 or 256-bit */
+	aes_key_type = (flags >> 16) & MASK_8BIT;
+
+	if (flags & AES_DIR_ENCRYPT) {
+		status = CALSymEncAuthDMA(aes_key_type, (uint32_t *)gcm->key,
+					  SATSYMMODE_GCM, (void *)gcm->iv,
+					  (void *)gcm->src, (void *)gcm->dst,
+					  (uint32_t)gcm->size,
+					  (void *)gcm->aad, (uint32_t)gcm->aad_size,
+					  (void *)gcm->tag, (uint32_t)gcm->tag_size,
+					  X52CCR_DEFAULT);
+		err = SBI_EFAIL;
+	} else {
+		status = CALSymDecVerifyDMA(aes_key_type, (uint32_t *)gcm->key,
+					    SATSYMMODE_GCM, (void *)gcm->iv,
+					    (void *)gcm->src, (void *)gcm->dst,
+					    (uint32_t)gcm->size,
+					    (void *)gcm->aad, (uint32_t)gcm->aad_size,
+					    (void *)gcm->tag, (uint32_t)gcm->tag_size,
+					    X52CCR_DEFAULT);
+		err = SBI_EINVAL;
+	}
+
+	if (SATR_SUCCESS != status)
+		return err;
+
+	status = CALPKTrfRes(SAT_TRUE);
+	if (SATR_SUCCESS != status)
+		return err;
+
+	return SBI_OK;
+}
+
+int sbi_ecall_crypto_handler(
 			     unsigned long funcid,
-			     const struct sbi_trap_regs *regs,
-			     unsigned long *out_val,
-			     struct sbi_trap_info *out_trap)
+			     struct sbi_trap_regs *regs,
+			     struct sbi_ecall_return *out)
 {
 	int result = SBI_EFAIL;
 	uint32_t crypto_service;
 	uint8_t crypto_clk_enable;
+	uint8_t aes_algo_mode;
 	struct mchp_crypto_info *crypto;
 
 	switch (funcid) {
@@ -154,6 +221,10 @@ int sbi_ecall_crypto_handler(unsigned long extid,
 	case SBI_EXT_CRYPTO_SERVICES_PROBE:
 		if (crypto_initialized) {
 			crypto = (struct mchp_crypto_info *)regs->a0;
+			if (!mCRYPTO_PTR_VALID(crypto, struct mchp_crypto_info)) {
+				result = SBI_EINVAL;
+				break;
+			}
 
 			crypto->services = CRYPTO_SERVICE_AES;
 			crypto->cipher_algo = CRYPTO_ALG_AES_ECB |
@@ -161,7 +232,7 @@ int sbi_ecall_crypto_handler(unsigned long extid,
 					      CRYPTO_ALG_AES_OFB |
 					      CRYPTO_ALG_AES_CFB |
 					      CRYPTO_ALG_AES_CTR;
-			crypto->aead_algo = 0;
+			crypto->aead_algo = CRYPTO_ALG_AES_GCM;
 			crypto->hash_algo = 0;
 			crypto->mac_algo = 0;
 			crypto->akcipher_algo = 0;
@@ -177,7 +248,11 @@ int sbi_ecall_crypto_handler(unsigned long extid,
 				crypto_service = (uint32_t)regs->a0;
 				switch (crypto_service) {
 				case CRYPTO_SERVICE_AES:
-					result = crypto_aes_operation(regs);
+					aes_algo_mode = ((uint32_t)regs->a2 >> 8) & MASK_8BIT;
+					if (aes_algo_mode == SATSYMMODE_GCM)
+						result = crypto_aes_gcm_operation(regs);
+					else
+						result = crypto_aes_operation(regs);
 					break;
 				default:
 					break;

@@ -29,7 +29,6 @@
 #include "mss_gpio.h"
 #endif
 #include "mss_mmc.h"
-#include "hal/hw_macros.h"
 #ifndef __IO
 #  define __IO volatile
 #endif
@@ -190,10 +189,11 @@ static bool mmc_init_sdcard(void)
         .data_bus_width = MSS_MMC_DATA_WIDTH_4BIT,
 #if IS_ENABLED(CONFIG_SERVICE_MMC_DEFAULT_SPEED)
         .bus_speed_mode = MSS_SDCARD_MODE_DEFAULT_SPEED,
+        .clk_rate = MSS_MMC_CLOCK_25MHZ,
 #else
         .bus_speed_mode = MSS_SDCARD_MODE_HIGH_SPEED,
-#endif
         .clk_rate = MSS_MMC_CLOCK_50MHZ,
+#endif
     };
 
 

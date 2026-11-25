@@ -55,8 +55,8 @@ static uint32_t message_present_handler(uint32_t remote_hart_id, uint32_t * mess
     return 0u;
 }
 
-int sbi_ecall_ihc_handler(unsigned long extid, unsigned long funcid,
-    const struct sbi_trap_regs *regs, unsigned long *out_val, struct sbi_trap_info *out_trap)
+int sbi_ecall_ihc_handler(unsigned long funcid,
+    struct sbi_trap_regs *regs, struct sbi_ecall_return *out)
 {
     uint32_t my_hart_id;
     uint32_t remote_hart_id;
@@ -69,7 +69,12 @@ int sbi_ecall_ihc_handler(unsigned long extid, unsigned long funcid,
         goto exit;
     }
 
-    if (message_ptr == NULL || !HSS_DDR_IsAddrInDDR((uintptr_t)message_ptr)) {
+    // message_ptr is written with a whole ihc_sbi_rx_msg (RECEIVE) or read as
+    // IHC_MAX_MESSAGE_SIZE words (SEND), so check the larger of the two
+    if (message_ptr == NULL
+            || !HSS_DDR_IsRangeInDDR((uintptr_t)message_ptr,
+                (sizeof(struct ihc_sbi_rx_msg) > (IHC_MAX_MESSAGE_SIZE * sizeof(uint32_t)))
+                    ? sizeof(struct ihc_sbi_rx_msg) : (IHC_MAX_MESSAGE_SIZE * sizeof(uint32_t)))) {
         result = SBI_EINVAL;
         goto exit;
     }

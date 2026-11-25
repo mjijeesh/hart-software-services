@@ -43,7 +43,53 @@ When HSS boots without a manual CLI override, `HSS_BootInit()` evaluates boot me
 └─────────────────────────────────────────┘
 ```
 
+<<<<<<< HEAD
 **Note:** HSS prioritizes MMC/SD over SPI Flash so images flashed to removable media take precedence over SPI flash payloads.
+=======
+    hart-software-services
+    ├── application (main function, crt startup, init function)
+    ├── baremetal
+    │   ├── drivers (local modules)
+    │   └── polarfire-soc-bare-metal-library (subtree)
+    ├── boards
+    │   ├── mpfs-icicle-kit-es (Microchip Icicle Kit)
+    │   ├── aries-m100pfsevp (Aries M100PFEVPS Kit)
+    │   └── custom-board-design (template for new boards)
+    ├── envm-wrapper (helper routines to inflate the HSS to L2-Scratchpad)
+    ├── include
+    ├── init (system initialization)
+    ├── modules
+    │   ├── compression
+    │   ├── crypto
+    │   ├── debug (helper routines for function profiling)
+    │   ├── misc (miscellaneous routines)
+    │   └── ssmb (secure software message bus)
+    │        └── ipi
+    ├── services (software service state machines)
+    │   ├── beu
+    │   ├── boot
+    │   ├── crypto
+    │   ├── ddr
+    │   ├── goto
+    │   ├── ipi_poll
+    │   ├── mmc
+    │   ├── opensbi
+    │   ├── qspi
+    │   ├── scrub
+    │   ├── sgdma
+    │   ├── spi
+    │   ├── tinycli
+    │   ├── uart
+    │   ├── usbdmsc
+    │   │    └── flash_drive
+    │   ├── wdog
+    │   └── ymodem
+    └── thirdparty
+        ├── Kconfiglib (a Kconfig implementation in Python)
+        ├── libecc (library for elliptic curves based cryptography (ECC))
+        ├── miniz (fast lossless compression library)
+        └── opensbi (RISC-V OpenSBI)
+>>>>>>> upstream/master
 
 ---
 

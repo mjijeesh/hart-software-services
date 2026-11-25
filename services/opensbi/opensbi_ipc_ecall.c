@@ -35,8 +35,7 @@
 
 #define mIPC_PTR_VALID(ptr, type) \
     ((ptr) != NULL \
-     && HSS_DDR_IsAddrInDDR((uintptr_t)(ptr)) \
-     && HSS_DDR_IsAddrInDDR((uintptr_t)(ptr) + sizeof(type)))
+     && HSS_DDR_IsRangeInDDR((uintptr_t)(ptr), sizeof(type)))
 
 enum ipc_hw {
     MIV_IHC,
@@ -82,8 +81,8 @@ static uint32_t ihc_mp_isr_callback(uint8_t channel,
     // validate the destination before writing as sbi_msg->addr is U-mode-supplied
     // and could otherwise redirect this memcpy to arbitrary M-mode memory
     //
-    if (!mIPC_PTR_VALID((void *)sbi_msg->addr, uint8_t)
-            || !HSS_DDR_IsAddrInDDR(sbi_msg->addr + sbi_msg->size)) {
+    if (((void *)sbi_msg->addr == NULL)
+            || !HSS_DDR_IsRangeInDDR(sbi_msg->addr, sbi_msg->size)) {
         return 1u;
     }
 
@@ -92,8 +91,21 @@ static uint32_t ihc_mp_isr_callback(uint8_t channel,
     return 0u;
 }
 
-int sbi_ecall_ipc_handler(unsigned long extid, unsigned long funcid,
-    const struct sbi_trap_regs *regs, unsigned long *out_val, struct sbi_trap_info *out_trap)
+static uint32_t ihc_mc_isr_callback(uint8_t channel,
+                                    const uint32_t *message,
+                                    uint32_t message_size,
+                                    uint32_t *ext_msg_ptr)
+{
+    (void)channel;
+    (void)message;
+    (void)message_size;
+    (void)ext_msg_ptr;
+
+    return 0u;
+}
+
+int sbi_ecall_ipc_handler(unsigned long funcid,
+    struct sbi_trap_regs *regs, struct sbi_ecall_return *out)
 {
     int result;
     uint32_t channel;
@@ -122,6 +134,7 @@ int sbi_ecall_ipc_handler(unsigned long extid, unsigned long funcid,
             }
             IHC_init(channel);
             IHC_config_mp_callback_handler(channel,ihc_mp_isr_callback);
+            IHC_config_mc_callback_handler(channel,ihc_mc_isr_callback);
             IHC_enable_mp_interrupt(channel);
             IHC_enable_mc_interrupt(channel);
             ipc_init_msg_ptr->max_msg_size = MAX_MSG_SIZE_IN_BYTES;
@@ -134,8 +147,8 @@ int sbi_ecall_ipc_handler(unsigned long extid, unsigned long funcid,
                 result = SBI_EINVAL;
                 break;
             }
-            if (!mIPC_PTR_VALID((void *)sbi_msg->addr, uint8_t)
-                    || !HSS_DDR_IsAddrInDDR(sbi_msg->addr + sbi_msg->size)) {
+            if (((void *)sbi_msg->addr == NULL)
+                    || !HSS_DDR_IsRangeInDDR(sbi_msg->addr, sbi_msg->size)) {
                 result = SBI_EINVAL;
                 break;
             }
@@ -143,7 +156,7 @@ int sbi_ecall_ipc_handler(unsigned long extid, unsigned long funcid,
             if(result == 0)
                 result = SBI_OK;
             else {
-                *out_val = result;
+                out->value = result;
                 result = SBI_ERR_FAILED;
             }
             break;
@@ -158,7 +171,7 @@ int sbi_ecall_ipc_handler(unsigned long extid, unsigned long funcid,
             if(result == 0)
                 result = SBI_OK;
             else {
-                *out_val = result;
+                out->value = result;
                 result = SBI_ERR_FAILED;
             }
             break;

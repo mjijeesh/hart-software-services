@@ -1,5 +1,5 @@
-#ifndef OPENSBI_RPROC_SERVICE_H
-#define OPENSBI_RPROC_SERVICE_H
+#ifndef OPENSBI_RPROC_IPC_ECALL_H
+#define OPENSBI_RPROC_IPC_ECALL_H
 
 /*******************************************************************************
  * Copyright 2019-2025 Microchip FPGA Embedded Systems Solutions.
@@ -33,20 +33,10 @@
 extern "C" {
 #endif
 
-#include "opensbi_ecall.h"
+#include "opensbi_rproc_ecall.h"
 
-# define RPROC_BOOT 0x80
-# define RPROC_SHUTDOWN_MSG 0xFFFFFF02
-
-#define CONTEXT_OFFLINE 0
-#define CONTEXT_RUNNING 1
-
-struct RemoteProcMsg {
-    enum HSSHartId target;
-};
-
-int sbi_ecall_rproc_ipc_handler(unsigned long extid, unsigned long funcid,
-    const struct sbi_trap_regs *regs, unsigned long *out_val, struct sbi_trap_info *out_trap);
+int sbi_ecall_rproc_ipc_handler(unsigned long funcid,
+    struct sbi_trap_regs *regs, struct sbi_ecall_return *out);
 
 #ifdef __cplusplus
 }

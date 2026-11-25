@@ -107,6 +107,28 @@ config TAMPER_BASE_ADDRESS
 
 endmenu
 
+menu "System Controller"
+
+config SYSCTRL_WAKE
+	bool "Wake System Controller via GPIO"
+	default n
+	help
+	  When SYSTEM_CONTROLLER_SUSPEND_MODE is enabled the System Controller
+	  suspends right after fabric programming.
+
+	  Enabling this option registers HSS_SysCtrl_Wake() in the board init
+	  sequence to assert a GPIO wake signal and poll the SUSPEND_EN status
+	  until the System Controller confirms it is active. Disable this option
+	  if the FPGA design does not use SYSTEM_CONTROLLER_SUSPEND_MODE.
+
+	  A default no-op implementation is provided as a weak stub. Boards that
+	  require this feature must supply a strong HSS_SysCtrl_Wake() definition
+	  in their board-specific code (e.g. boards/<board>/hss_board_init.c).
+
+	  If you do not know what to do here, say N.
+
+endmenu
+
 config ALLOW_COLDREBOOT
 	bool "Allow contexts to issue a cold reboot"
 	default y
@@ -199,6 +221,28 @@ config PROVIDE_DTB
                 If this isn't needed, it is possible to save some space by removing it.
 
 		If you don't know what to do here, say Y.
+
+config PROVIDE_DTB_DDR_ADDR
+	hex "DDR address to copy built-in DTB into"
+	depends on PROVIDE_DTB
+	default 0x80100000
+	help
+		The built-in DTB is linked into the HSS firmware region (0x0a000000+),
+		which OpenSBI marks inaccessible to S-mode when PMPs are enabled.
+		U-Boot reads the DTB directly from the address passed in a1, and
+		therefore requires it to be in a memory region accessible from S-mode.
+
+		This option specifies the DDR address the DTB is copied to before
+		being passed to OpenSBI/U-Boot. The copy only takes place when PMPs
+		are enabled in the board configuration. When PMPs are not enabled,
+		the built-in DTB address is passed directly and this option has no
+		effect.
+
+		The address must be in DDR and fall within a PMP region accessible
+		to S-mode. It must not overlap the boot payload (e.g. U-Boot) or
+		other reserved regions.
+
+		If you don't know what to change this to, leave it at the default.
 endmenu
 
 menu "Memory Options"

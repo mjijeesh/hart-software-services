@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright 2019-2021 Microchip Corporation.
+ * Copyright 2019-2026 Microchip Corporation.
  *
  * SPDX-License-Identifier: MIT
  *
@@ -209,8 +209,6 @@ SECTIONS
         *(.note.gnu.build-id)
     } >l2zerodevice
 
-    PROVIDE(_hss_end = .);
-
     /*******************************************************************************
      *
      * The .ram_code section will contain the code That is run from RAM.
@@ -259,7 +257,7 @@ SECTIONS
      * (Explicitly) Initialized data section
      *
      */
-#ifdef CONFIG_SERVICE_BOOT_USE_PAYLOAD 
+#if defined(CONFIG_SERVICE_BOOT_USE_PAYLOAD) && !defined(CONFIG_SERVICE_BOOT_USE_PAYLOAD_IN_FABRIC)
     .data.payload : ALIGN(16) 
     {
       _payload_start = .;
@@ -274,7 +272,23 @@ SECTIONS
         __data_start = .;
         *(.got.plt) *(.got)
         *(.shdata)
+#ifdef CONFIG_PROVIDE_DTB
+        /*
+         * Built-in DTB, handed to the next stage in place. Place it in a
+         * window sized to the next power of 2 and aligned to that size, so
+         * that it satisfies libfdt's 8-byte alignment and can be described
+         * by a single NAPOT PMP entry (S-mode read-only, see platform.c).
+         */
+#define MPFS_DTB_WINDOW_SIZE (1 << LOG2CEIL(_binary_build_services_opensbi_mpfs_dtb_size))
+        *(EXCLUDE_FILE(*mpfs_dtb.o) .data .data.* .gnu.linkonce.d.*)
+        . = ALIGN(MPFS_DTB_WINDOW_SIZE);
+        mpfs_dtb_start = .;
+        KEEP(*mpfs_dtb.o(.data))
+        . = mpfs_dtb_start + MPFS_DTB_WINDOW_SIZE;
+        mpfs_dtb_end = .;
+#else
         *(.data .data.* .gnu.linkonce.d.*)
+#endif
         . = ALIGN(0x10);
         __data_end = .;
     } >l2zerodevice
@@ -313,6 +327,19 @@ SECTIONS
         . = ALIGN(0x10);
         __bss_end = .;
     } >l2zerodevice
+
+    /*
+     * Dedicated heap for OpenSBI v1.8+ dynamic allocations (domains, devices,
+     * per-hart HSM state).  Must NOT overlap with code or data.
+     */
+    .opensbi_heap : ALIGN(0x400)
+    {
+        __opensbi_heap_start = .;
+        . += 0x10000; /* 64 KiB — v1.8 allocates per-hart state (PMU, SSE, FWFT, DBTR) */
+        __opensbi_heap_end = .;
+    } >l2zerodevice
+
+    PROVIDE(_hss_end = .);
 
     /*
      * Reserved space for Hart stacks

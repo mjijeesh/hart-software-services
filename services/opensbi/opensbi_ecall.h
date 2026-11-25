@@ -34,20 +34,6 @@ extern "C" {
 
 #include <string.h>
 
-// Previously the vendor ID was to be a number allocated by RISC-V International,
-// but this duplicates the work of JEDEC in maintaining a manufacturer ID standard.
-// SBI ECALLs in the VENDOR region are by MVENDORID as per section 3.1.2 of
-// RISC-V Priviliged Architectures spec (2.2-draft or later)
-//
-// mvendorid[6:0] = JEDEC[6:0]
-// mvendorid[XLEN-1:7] = number of 0x7f continuation codes
-
-
-// Microchip Technology JEDEC Id: Bank 1, 0x29 => MVENDORID = 0x029
-#define MICROCHIP_TECHNOLOGY_MVENDOR_ID  0x029
-
-#define SBI_EXT_MICROCHIP_TECHNOLOGY    (SBI_EXT_VENDOR_START | MICROCHIP_TECHNOLOGY_MVENDOR_ID)
-
 #define SBI_EXT_IHC_CTX_INIT   0x00
 #define SBI_EXT_IHC_SEND       0x01
 #define SBI_EXT_IHC_RECEIVE    0x02
@@ -74,9 +60,8 @@ extern "C" {
 #include <sbi/sbi_platform.h>
 #include <sbi/sbi_trap.h>
 
-int HSS_SBI_ECALL_Handler(long extid, long funcid,
-    const struct sbi_trap_regs *regs, unsigned long *out_val, struct sbi_trap_info *out_trap);
-int HSS_SBI_Vendor_Ext_Check(long extid);
+int HSS_SBI_ECALL_Handler(long funcid,
+    struct sbi_trap_regs *regs, struct sbi_ecall_return *out);
 
 #ifdef __cplusplus
 }
