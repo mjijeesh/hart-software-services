@@ -21,6 +21,7 @@
 #include <stdlib.h>
 
 #include "hss_boot_init.h"
+#include "hss_boot_service.h"
 #include "gpt.h"
 #include "hss_init.h"
 #include "hss_state_machine.h"
@@ -47,6 +48,8 @@
 #include "clocks/hw_mss_clks.h" // LIBERO_SETTING_MSS_RTC_TOGGLE_CLK
 #include "mpfs_reg_map.h"
 #include "opensbi_service.h"
+
+
 
 #if IS_ENABLED(CONFIG_SERVICE_USBDMSC) && (IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI))
 #    include "usbdmsc_service.h"
@@ -105,6 +108,56 @@ struct tinycli_toplevel_cmd_safe {
     const int tokenId;
     bool warnIfPostInit;
 };
+
+
+/* New Additional Commands */
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+#    include "services/serialboot/serialboot.h"
+    static void tinyCLI_SerialBoot_(void);
+   
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#    include "services/spi/spi_flash.h"
+#    ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
+#        define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
+#    endif
+#endif
+
+
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+#include "services/netboot/netboot_service.h"
+
+#ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
+#define CONFIG_NETBOOT_DEFAULT_FILENAME "boot.bin"
+#endif
+
+#ifndef CONFIG_NETBOOT_DDR_DEST_ADDR
+#define CONFIG_NETBOOT_DDR_DEST_ADDR 0x80000000UL
+#endif
+
+static void tinyCLI_NetBoot_(void);
+#endif
+
+
+
+#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+#    include "ymodem.h"
+#    ifndef CONFIG_YMODEM_DDR_DEST_ADDR
+#        ifdef CONFIG_NETBOOT_DDR_DEST_ADDR
+#            define CONFIG_YMODEM_DDR_DEST_ADDR CONFIG_NETBOOT_DDR_DEST_ADDR
+#        else
+#            define CONFIG_YMODEM_DDR_DEST_ADDR 0x80000000UL
+#        endif
+#    endif
+#    ifndef CONFIG_YMODEM_MAX_PAYLOAD_SIZE
+#        define CONFIG_YMODEM_MAX_PAYLOAD_SIZE (32u * 1024u * 1024u)
+#    endif
+#endif
+
+
+static unsigned long int tinyCLI_strtoul_wrapper_(const char *__restrict nptr);
 
 static bool tinyCLI_NameToCmdIndex_(struct tinycli_cmd const * const pCmds, size_t numCmds,
     char const * const pToken, size_t *pIndex);
@@ -226,6 +279,9 @@ enum CmdId {
 
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
+    CMD_SERIALBOOT,    
+    CMD_NETBOOT,    
+    
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -315,6 +371,12 @@ static const struct tinycli_cmd toplevelCmds[] = {
 #if IS_ENABLED(CONFIG_SERVICE_BEU)
     { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
 #endif
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ },   
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+    { CMD_NETBOOT, "NETBOOT", "Download image over network [default DDR | SPI [offset] | SD | EMMC]", tinyCLI_NetBoot_ },
+#endif
 };
 
 static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
@@ -349,9 +411,13 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 #if IS_ENABLED(CONFIG_SERVICE_BEU)
     { CMD_ECC,     false },
 #endif
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+    { CMD_SERIALBOOT, true },   
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+    { CMD_NETBOOT, true },
+#endif
 };
-
-_Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootFlags), "arrays toplevelCmds and topLevelCmdSafeAfterBootFlags need to be same dimension");
 
 
 /***********************************************************************/
@@ -554,7 +620,6 @@ static void tinyCLI_Debug_(void)
     if (!dispatch_command_(debugCmds, ARRAY_SIZE(debugCmds), 1u)) {
         display_help_(debugCmds, ARRAY_SIZE(debugCmds), 1u);
     }
-
 }
 
 extern struct HSS_Storage *HSS_BootGetActiveStorage(void);
@@ -888,6 +953,9 @@ static void tinyCLI_UnsupportedBootMechanism_(char const * const pName)
     HSS_BootListStorageProviders();
 }
 
+
+
+/* 
 #if IS_ENABLED(CONFIG_SERVICE_YMODEM)
 static void tinyCLI_YModem_(void)
 {
@@ -895,6 +963,13 @@ static void tinyCLI_YModem_(void)
     hss_loader_ymodem_loop();
 }
 #endif
+*/
+
+
+
+
+
+
 
 #if IS_ENABLED(CONFIG_SERVICE_SCRUB)
 static void tinyCLI_Scrub_(void)
@@ -939,6 +1014,7 @@ static void tinyCLI_Payload_(void)
 #endif
 }
 
+/*   
 static void tinyCLI_SPI_(void)
 {
 #if defined(CONFIG_SERVICE_SPI)
@@ -947,6 +1023,8 @@ static void tinyCLI_SPI_(void)
     tinyCLI_UnsupportedBootMechanism_("SPI");
 #endif
 }
+*/
+
 
 static void tinyCLI_SNVM_(void)
 {
@@ -1003,10 +1081,14 @@ static void display_help_(struct tinycli_cmd const * const pCmds, size_t arraySi
         if ((level == 0u) && (toplevelCmdsSafeAfterBootFlags[i].warnIfPostInit)) {
             HSS_Debug_Highlight(HSS_DEBUG_LOG_WARN);
         }
-        mHSS_PUTS(pCmds[i].name);
+        
+        /* Print the command name padded to 14 characters for clean alignment */
+        mHSS_PRINTF("  %-14s", pCmds[i].name);
+        
         HSS_Debug_Highlight(HSS_DEBUG_LOG_NORMAL);
-        mHSS_PUTC(' ');
-        //mHSS_PRINTF(" - %s\n", pCmds[i].helpString);
+        
+        /* Print the detailed help string on the same line */
+        mHSS_PRINTF(" - %s\n", pCmds[i].helpString);
     }
 
     mHSS_PUTS("\n");
@@ -1079,7 +1161,6 @@ bool HSS_TinyCLI_Parser(void)
                 tinyCLI_Reset_();
             }
 #endif
-
         }
     }
 
@@ -1143,4 +1224,60 @@ static void tinyCLI_Resume_(void)
     volatile uint32_t * const msip =
        (volatile uint32_t *)((uintptr_t)CLINT_BASE_ADDR + 4u * hartid);
     *msip = 1u;
+}
+
+
+
+/* SerialBoot CMD Function */
+
+#if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
+static void tinyCLI_SerialBoot_(void)
+{
+    HSS_SerialBoot_CLI(argc_tokenCount, argv_tokenArray);
+}
+#endif
+
+/*  SPI Commands  Commands */ 
+
+
+static void tinyCLI_SPI_(void)
+{
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+    HSS_SPI_CLI(argc_tokenCount, argv_tokenArray);
+#elif defined(CONFIG_SERVICE_SPI)
+    HSS_BootSelectSPI();
+#else
+    tinyCLI_UnsupportedBootMechanism_("SPI");
+#endif
+}
+
+#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+static void tinyCLI_YModem_(void)
+{
+    HSS_YModem_CLI(argc_tokenCount, argv_tokenArray);
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+static void tinyCLI_NetBoot_(void)
+{
+    HSS_NetBoot_CLI(argc_tokenCount, argv_tokenArray);
+}
+#endif
+
+unsigned long strtoul_(const char *nptr);
+
+unsigned long strtoul_(const char *nptr)
+{
+    int base = 10;
+
+    if (!nptr) {
+        return 0UL;
+    }
+
+    if ((nptr[0] == '0') && (nptr[1] == 'x' || nptr[1] == 'X')) {
+        base = 16;
+    }
+
+    return strtoul(nptr, NULL, base);
 }

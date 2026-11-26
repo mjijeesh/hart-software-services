@@ -78,6 +78,8 @@ extern struct StateMachine boot_service2;
 extern struct StateMachine boot_service3;
 extern struct StateMachine boot_service4;
 
+bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count);
+
 #ifdef __cplusplus
 }
 #endif

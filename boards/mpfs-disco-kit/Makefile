@@ -93,7 +93,53 @@ EXTRA_SRCS-$(CONFIG_SERVICE_QSPI) += \
 $(BINDIR)/baremetal/drivers/micron_mt25q/micron_mt25q.o: CFLAGS=$(CFLAGS_GCCEXT)
 endif
 
+################################################################################################
+#
+# Extra hardware dependency rules for MSS SPI0 (Discovery Kit Flash)
+#
 
+ifdef CONFIG_SERVICE_SERIALBOOT
+INCLUDES += \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/mpfs_hal/common \
+    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/hal
+
+EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+    baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.c \
+    $(BOARD_DIR)/board_spi.c
+
+$(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/$(BOARD_DIR)/board_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/services/serialboot/serialboot.o: CFLAGS += -DSERIALBOOT_UART_INDEX=1
+endif
+
+ifdef CONFIG_SERVICE_NETBOOT
+
+MSS_ETH_DIR := baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_ethernet_mac
+
+INCLUDES += -Iservices/netboot \
+            -Ibaremetal/polarfire-soc-bare-metal-library/src/platform \
+            -I$(MSS_ETH_DIR)
+
+SRCS-$(CONFIG_SERVICE_NETBOOT) += \
+    services/netboot/netboot_service.c \
+    services/netboot/netboot_cli.c \
+    boards/mpfs-disco-kit/board_eth.c \
+    $(MSS_ETH_DIR)/mss_ethernet_mac.c \
+    $(MSS_ETH_DIR)/vsc8221_phy.c \
+    $(MSS_ETH_DIR)/null_phy.c
+
+# Target hardware and 64-bit architecture definitions
+CFLAGS += -DTARGET_G5_SOC=1 \
+          -DMSS_MAC_64_BIT_ADDRESS_MODE=1 \
+          -DMSS_MAC_SIMPLE_TX_QUEUE=1 \
+		  -include $(BOARD_DIR)/mss_ethernet_mac_sw_cfg.h
+
+# Compile baremetal driver source files with GCC extensions and suppressed warnings
+$(BINDIR)/$(MSS_ETH_DIR)/%.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+$(BINDIR)/$(BOARD_DIR)/board_eth.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
+
+endif
 ################################################################################################
 #
 # Linker Scripts

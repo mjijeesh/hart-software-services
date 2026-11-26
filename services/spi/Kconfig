@@ -1,7 +1,30 @@
-config SERVICE_SPI
-	bool "Boot from System Controller SPI flash support"
-	default n
+choice
+	prompt "SPI Flash Boot Support"
+	optional
 	help
-                This feature enables booting from a payload stored in the SPI flash connected to the PolarFire SoC System Controller.
+	  Select the SPI flash controller used for booting an HSS payload image.
+	  System Controller SPI (SC_SPI) and Board/MSS SPI are mutually exclusive;
+	  selecting one automatically disables the other.
 
-		If you do not know what to do here, say Y.
+config SERVICE_SPI
+	bool "Boot from System Controller SPI flash support (SC_SPI)"
+	help
+	  Enables booting from a payload stored in the dedicated SPI flash
+	  connected to the PolarFire SoC System Controller (via MSS_SYS_spi_copy).
+
+config SERVICE_MSS_SPI_BOOT
+	bool "Boot from MSS / Board SPI flash support (board_spi.c)"
+	select SERVICE_SPI_FLASH
+	help
+	  Enables booting from an external SPI NOR flash connected to the
+	  board SPI controller (boards/<board>/board_spi.c) at offset
+	  CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET (default 0x400).
+
+endchoice
+
+config SERVICE_SPI_FLASH
+	bool "SPI Flash Programming Support (YMODEM SPI , SERIALBOOT SPI , NETBOOT SPI )"
+	default y if SERVICE_SPI || SERVICE_MSS_SPI_BOOT || SERVICE_NETBOOT || SERVICE_SERIALBOOT
+	help
+	  Enables external SPI NOR flash erase, program, and verification
+	  support via boards/<board>/board_spi.c.

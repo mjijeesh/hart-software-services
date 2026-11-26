@@ -1,10 +1,10 @@
   <mss xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="mpfs_hw_description.xsd">
     <design_information>
-      <libero_version>2023.2</libero_version>
+      <libero_version>2025.2</libero_version>
       <design_name>MPFS_DISCOVERY_KIT_MSS</design_name>
       <mpfs_part_no>MPFS095T</mpfs_part_no>
       <mpfs_package>FCSG325</mpfs_package>
-      <creation_date_time>02-26-2024_13:52:25</creation_date_time>
+      <creation_date_time>11-03-2026_15:20:54</creation_date_time>
       <xml_format_version>0.6.8</xml_format_version>
     </design_information>
     <mss_memory_map>
@@ -1256,10 +1256,10 @@
             <field Type="RW" name="PAD4" offset="16" width="4">0x0</field>
             <field Type="RW" name="PAD5" offset="20" width="4">0x0</field>
             <field Type="RW" name="PAD6" offset="24" width="4">0x0</field>
-            <field Type="RW" name="PAD7" offset="28" width="4">0x0</field>
+            <field Type="RW" name="PAD7" offset="28" width="4">0xF</field>
           </register>
           <register address="0x00000208" description="Configures the IO Mux structure for each IO pad.  0  implies  SD/SDIO, 1 implies  EMMC, 2 implies QSPI, 3 implies SPI,4 implies USB,5 implies MMUART,6 implies I2C,7 implies CAN,8 implies MDIO,9 implies Miscellaneous,0xA implies Reserved (Equivalent to Tristate),0xB implies GPIO ,0xC implies Fabric-test,0xD implies Logic 0,0xE implies Logic 1, 0xF implies Tristate" name="IOMUX2_CR">
-            <field Type="RW" name="PAD8" offset="0" width="4">0x0</field>
+            <field Type="RW" name="PAD8" offset="0" width="4">0xF</field>
             <field Type="RW" name="PAD9" offset="4" width="4">0x0</field>
             <field Type="RW" name="PAD10" offset="8" width="4">0x0</field>
             <field Type="RW" name="PAD11" offset="12" width="4">0x0</field>
@@ -1297,7 +1297,7 @@
             <field Type="RW" name="PAD37" offset="28" width="4">0xF</field>
           </register>
           <register address="0x00000218" description="Sets whether the MMC/SD Voltage select lines are inverted on entry to the IOMUX structure" name="IOMUX6_CR">
-            <field Type="RW" name="VLT_SEL" offset="0" width="1">0x0</field>
+            <field Type="RW" name="VLT_SEL" offset="0" width="1">0x1</field>
             <field Type="RW" name="VLT_EN" offset="1" width="1">0x0</field>
             <field Type="RW" name="VLT_CMD_DIR" offset="2" width="1">0x0</field>
             <field Type="RW" name="VLT_DIR_0" offset="3" width="1">0x0</field>
@@ -3214,7 +3214,7 @@
             <field Type="RW" name="CFG_ZQ_CAL_PER" offset="0" width="32">0x27100</field>
           </register>
           <register address="0x000041C4" description="IP Blk = MC_BASE2 Access=RW " name="CFG_AUTO_ZQ_CAL_EN">
-            <field Type="RW" name="CFG_AUTO_ZQ_CAL_EN" offset="0" width="32">0x0</field>
+            <field Type="RW" name="CFG_AUTO_ZQ_CAL_EN" offset="0" width="32">0x1</field>
           </register>
           <register address="0x000041C8" description="IP Blk = MC_BASE2 Access=RW " name="CFG_MEMORY_TYPE">
             <field Type="RW" name="CFG_MEMORY_TYPE" offset="0" width="32">0x80</field>
