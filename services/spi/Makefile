@@ -33,7 +33,7 @@ SRCS-$(CONFIG_SERVICE_SPI_FLASH) += \
 	services/spi/spi_cli.c
 
 SRCS-$(CONFIG_SPI_FLASH_MSS_SPI) += \
-	services/spi/spi_flash_mss.c
+#	services/spi/spi_flash_mss.c
 
 INCLUDES += -Iservices/spi
 

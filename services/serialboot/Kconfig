@@ -1,0 +1,7 @@
+config SERVICE_SERIALBOOT
+	bool "Serial Boot SFL support"
+	default n
+        select SERVICE_TINYCLI
+	help
+        Enable the custom Serial Framing Protocol (SFL) bootloader
+        to download and execute bare-metal binaries via UART.

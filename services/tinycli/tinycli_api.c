@@ -340,9 +340,7 @@ static const struct tinycli_cmd qspiCmds[] = {
 #endif
 
 static const struct tinycli_cmd toplevelCmds[] = {
-#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
-    { CMD_YMODEM,  "YMODEM",  "Run YMODEM utility to download an image to DDR.", tinyCLI_YModem_ },
-#endif
+
 #if IS_ENABLED(CONFIG_SERVICE_BOOT)
     { CMD_BOOT,    "BOOT",    "Quit TinyCLI and return to regular boot process.", tinyCLI_Boot_ },
 #endif
@@ -369,7 +367,10 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_SCRUB,   "SCRUB",   "Dump Scrub service stats.", tinyCLI_Scrub_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_BEU)
-    { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
+    { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },    
+#endif
+#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+    { CMD_YMODEM,  "YMODEM",  "Run YMODEM utility to download an image to DDR.", tinyCLI_YModem_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
     { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ },   
