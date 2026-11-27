@@ -1195,7 +1195,7 @@ static void tinyCLI_SPI_(void)
 
 static void tinyCLI_SPI_(void)
 {
-#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#if (IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI))
     HSS_SPI_CLI(argc_tokenCount, argv_tokenArray);
 #elif defined(CONFIG_SERVICE_SPI)
     HSS_BootSelectSPI();

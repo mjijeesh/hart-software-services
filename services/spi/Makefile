@@ -26,11 +26,12 @@
 #
 # Virtual SPI Service
 SRCS-$(CONFIG_SERVICE_SPI) += \
-	services/spi/spi_service.c
+	services/spi/spi_service.c \
+	services/spi/spi_cli.c
 
 SRCS-$(CONFIG_SERVICE_SPI_FLASH) += \
-	services/spi/spi_flash.c \
-	services/spi/spi_cli.c
+    services/spi/spi_cli.c \
+	services/spi/spi_flash.c 
 
 
 INCLUDES += -Iservices/spi
