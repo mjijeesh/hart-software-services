@@ -118,7 +118,6 @@ INCLUDES += -Iservices/netboot \
             -I$(MSS_ETH_DIR)
 
 SRCS-$(CONFIG_SERVICE_NETBOOT) += \
-    services/netboot/netboot_service.c \
     boards/mpfs-icicle-kit/board_eth.c \
     $(MSS_ETH_DIR)/mss_ethernet_mac.c \
     $(MSS_ETH_DIR)/vsc8662_phy.c \

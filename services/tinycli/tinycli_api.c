@@ -49,7 +49,7 @@
 #include "mpfs_reg_map.h"
 #include "opensbi_service.h"
 
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
 #include "services/netboot/netboot_service.h"
 
 #ifndef CONFIG_NETBOOT_DEFAULT_FILENAME
@@ -260,18 +260,10 @@ enum CmdId {
     CMD_QSPI_ERASE,
     CMD_QSPI_SCAN,
     CMD_SERIALBOOT,
-    CMD_SPIFLASH,
-    CMD_SERIALBOOT_SD,
-    CMD_SERIALBOOT_EMMC,
-    CMD_SERIALBOOT_QSPI,
-    CMD_SERIALBOOT_SPI,
-    CMD_FLASHID,
-    CMD_FLASHBOOT,
+    
+    CMD_SPIFLASH,    
     CMD_NETBOOT,
-    CMD_NETBOOT_SD,
-    CMD_NETBOOT_EMMC,
-    CMD_NETBOOT_QSPI,
-    CMD_NETBOOT_SPI,
+    
 };
 
 #if IS_ENABLED(CONFIG_SERVICE_TINYCLI_MONITOR)
@@ -418,192 +410,7 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
 
 _Static_assert(ARRAY_SIZE(toplevelCmds) == ARRAY_SIZE(toplevelCmdsSafeAfterBootFlags), "arrays toplevelCmds and topLevelCmdSafeAfterBootFlags need to be same dimension");
 
-#if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
-static void netboot_parse_optional_args_(size_t start_idx,
-                                         uint32_t *p_server_ip,
-                                         const char **p_filename,
-                                         uintptr_t *p_load_addr)
-{
-    if (argc_tokenCount > start_idx) {
-        *p_server_ip = NETBOOT_ParseIP(argv_tokenArray[start_idx]);
-    }
-    if (argc_tokenCount > (start_idx + 1u)) {
-        *p_filename = argv_tokenArray[start_idx + 1u];
-    }
-    if (p_load_addr && argc_tokenCount > (start_idx + 2u)) {
-        *p_load_addr = (uintptr_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[start_idx + 2u]);
-    }
-}
 
-#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI)
-static void netboot_fetch_and_flash_(netboot_media_t media)
-{
-    uint32_t server_ip = 0;
-    const char *filename = CONFIG_NETBOOT_DEFAULT_FILENAME;
-    size_t bytes_read = 0;
-
-    /* For "netboot <media> [server_ip] [filename]", optional args start at token 2 */
-    netboot_parse_optional_args_(2u, &server_ip, &filename, NULL);
-
-    netboot_status_t status = NETBOOT_Service_FetchImage(
-        server_ip,
-        filename,
-        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
-        &bytes_read
-    );
-
-    if (status != NETBOOT_STATUS_OK) {
-        mHSS_PRINTF("[CLI] Netboot download failed with error code: %d\n", status);
-        return;
-    }
-
-    mHSS_PRINTF("[CLI] Downloaded %lu bytes to 0x%08lx. Programming storage...\n",
-                (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
-
-    NETBOOT_WritePayloadToStorage((uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR, bytes_read, media);
-}
-
-#if IS_ENABLED(CONFIG_SERVICE_MMC)
-static void tinyCLI_NetBoot_SD_(void)
-{
-    mHSS_PRINTF("\n[CLI] Netboot -> SD Card programming initiated...\n");
-    netboot_fetch_and_flash_(NETBOOT_MEDIA_SDCARD);
-}
-
-static void tinyCLI_NetBoot_EMMC_(void)
-{
-    mHSS_PRINTF("\n[CLI] Netboot -> eMMC programming initiated...\n");
-    netboot_fetch_and_flash_(NETBOOT_MEDIA_EMMC);
-}
-#endif
-
-#if IS_ENABLED(CONFIG_SERVICE_QSPI)
-static void tinyCLI_NetBoot_QSPI_(void)
-{
-    mHSS_PRINTF("\n[CLI] Netboot -> QSPI Flash programming initiated...\n");
-    netboot_fetch_and_flash_(NETBOOT_MEDIA_QSPI);
-}
-#endif
-#endif /* IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) */
-
-#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI)
-static void tinyCLI_NetBoot_SPI_(void)
-{
-    uint32_t server_ip = 0;
-    const char *filename = CONFIG_NETBOOT_DEFAULT_FILENAME;
-    uint32_t spi_offset = (uint32_t)CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET;
-    size_t bytes_read = 0;
-
-    /* Syntax: NETBOOT SPI [server_ip] [filename] [spi_offset] */
-    netboot_parse_optional_args_(2u, &server_ip, &filename, NULL);
-    if (argc_tokenCount > 4u) {
-        spi_offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[4]);
-    }
-
-    mHSS_PRINTF("\n[CLI] Netboot -> SPI Flash (offset 0x%x) programming initiated...\n", spi_offset);
-
-    netboot_status_t status = NETBOOT_Service_FetchImage(
-        server_ip,
-        filename,
-        (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR,
-        &bytes_read
-    );
-
-    if (status != NETBOOT_STATUS_OK) {
-        mHSS_PRINTF("[CLI] Netboot download failed with error code: %d\n", status);
-        return;
-    }
-
-    mHSS_PRINTF("[CLI] Downloaded %lu bytes to 0x%08lx. Programming SPI Flash...\n",
-                (unsigned long)bytes_read, (unsigned long)CONFIG_NETBOOT_DDR_DEST_ADDR);
-
-    spi_flash_write_payload(spi_offset, (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR, bytes_read);
-}
-#endif /* IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI)  */
-
-#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
-static const struct tinycli_cmd netbootCmds[] = {
-#if IS_ENABLED(CONFIG_SERVICE_MMC)
-    { CMD_NETBOOT_SD,   "SD",   "Download and flash payload to SD Card: NETBOOT SD [server_ip] [filename]",            tinyCLI_NetBoot_SD_ },
-    { CMD_NETBOOT_EMMC, "EMMC", "Download and flash payload to eMMC: NETBOOT EMMC [server_ip] [filename]",               tinyCLI_NetBoot_EMMC_ },
-#endif
-#if IS_ENABLED(CONFIG_SERVICE_QSPI)
-    { CMD_NETBOOT_QSPI, "QSPI", "Download and flash payload to QSPI Flash: NETBOOT QSPI [server_ip] [filename]",         tinyCLI_NetBoot_QSPI_ },
-#endif
-#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI)
-    { CMD_NETBOOT_SPI,  "SPI",  "Download and flash payload to SPI Flash: NETBOOT SPI [server_ip] [filename] [offset]",  tinyCLI_NetBoot_SPI_ },
-#endif
-};
-#endif
-
-static void tinyCLI_NetBoot_(void)
-{
-#if IS_ENABLED(CONFIG_SERVICE_MMC) || IS_ENABLED(CONFIG_SERVICE_QSPI) || IS_ENABLED(CONFIG_SERVICE_SPI_FLASH) || IS_ENABLED(CONFIG_SERVICE_SPI) || defined(CONFIG_SERVICE_SPI)
-    /* 1. Check if token 1 matches a storage subcommand (sd, emmc, qspi, spi) */
-    if (argc_tokenCount > 1u) {
-        if (dispatch_command_(netbootCmds, ARRAY_SIZE(netbootCmds), 1u)) {
-            return;
-        }
-
-        /* If token 1 is not an IP address (e.g., "netboot help" or invalid target), show subcommands */
-        if (argv_tokenArray[1][0] < '0' || argv_tokenArray[1][0] > '9') {
-            display_help_(netbootCmds, ARRAY_SIZE(netbootCmds), 1u);
-            mHSS_PRINTF("Or run without subcommand to boot directly to DDR:\n"
-                        "  NETBOOT [server_ip] [filename] [load_addr]\n");
-            return;
-        }
-    }
-#endif
-
-    /* 2. Default behavior: download directly to DDR and dispatch U54 harts */
-    uint32_t server_ip = 0;
-    const char *filename = CONFIG_NETBOOT_DEFAULT_FILENAME;
-    uintptr_t load_addr = (uintptr_t)CONFIG_NETBOOT_DDR_DEST_ADDR;
-    size_t bytes_read = 0;
-
-    netboot_parse_optional_args_(1u, &server_ip, &filename, &load_addr);
-
-    mHSS_PRINTF("\n[CLI] Initiating Netboot service...\n");
-
-    netboot_status_t status = NETBOOT_Service_FetchImage(
-        server_ip,
-        filename,
-        load_addr,
-        &bytes_read
-    );
-
-   if (status == NETBOOT_STATUS_OK) {
-        mHSS_PRINTF("[CLI] Transfer complete (%lu bytes). Decoding/booting from 0x%016lx...\n",
-                    (unsigned long)bytes_read, (unsigned long)load_addr);
-        (void)HSS_Boot_DecodeAndBootDDR(load_addr, bytes_read);
-    } else {
-        mHSS_PRINTF("[CLI] Netboot failed with error code: %d\n", status);
-    }
-}
-#endif
-
-
-
-
-
-/*
-
-static void tinyCLI_FlashId_(void)
-{
-    do_flash_read_id();
-}
-
-static void tinyCLI_FlashBoot_(void)
-{
-    uint32_t offset = (uint32_t)CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET;
-
-    if (argc_tokenCount >= 2) {
-        offset = (uint32_t)tinyCLI_strtoul_wrapper_(argv_tokenArray[1]);
-    }
-
-    do_flashboot(offset);
-}
-*/
 
 /***********************************************************************/
 
@@ -1419,5 +1226,12 @@ static void tinyCLI_SPIFLASH_(void)
 {
     HSS_SPIFLASH_CLI(argc_tokenCount, argv_tokenArray);
 
+}
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_NETBOOT)
+static void tinyCLI_NetBoot_(void)
+{
+    HSS_NetBoot_CLI(argc_tokenCount, argv_tokenArray);
 }
 #endif

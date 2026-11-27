@@ -50,3 +50,4 @@ include services/wdog/Makefile
 include services/ymodem/Makefile
 include services/serialboot/Makefile
 include services/spiflash/Makefile
+include services/netboot/Makefile

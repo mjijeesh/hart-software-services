@@ -29,7 +29,8 @@
 # Optional Services
 # ------------------------------------------------------------------------------
 SRCS-$(CONFIG_SERVICE_NETBOOT) += \
-    services/netboot/netboot_service.c \	
+    services/netboot/netboot_service.c \
+    services/netboot/netboot_cli.c
 
 INCLUDES += -Iservices/netboot \
            

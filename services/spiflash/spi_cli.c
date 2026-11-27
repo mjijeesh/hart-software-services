@@ -69,10 +69,10 @@ static unsigned long spi_cli_strtoul_(const char *nptr)
 static void spi_cli_print_usage_(void)
 {
     mHSS_PUTS("Usage:\n"
-              "  SPIFLASH                      - Select boot via SPI\n"
-              "  SPIFLASH  ID                   - Read SPI Flash JEDEC ID and info\n"
-              "  SPIFLASH  WRITE <addr> <off> <len> - Program DDR buffer to SPI Flash at offset\n"
-              "  SPIFLASH  BOOT [offset]        - Boot payload from SPI Flash (default 0x400)\n"
+              "  SPI                    - Select boot via SPI\n"
+              "  SPI  ID                   - Read SPI Flash JEDEC ID and info\n"
+              "  SPI  WRITE <addr> <off> <len> - Program DDR buffer to SPI Flash at offset\n"
+              "  SPI  BOOT [offset]        - Boot payload from SPI Flash (default 0x400)\n"
               "\n");
 }
 

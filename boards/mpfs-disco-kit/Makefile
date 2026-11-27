@@ -100,18 +100,24 @@ endif
 
 ifdef CONFIG_SERVICE_SERIALBOOT
 INCLUDES += \
-    -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi \
     -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/mpfs_hal/common \
     -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/hal
 
-EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
-    baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.c \
-    $(BOARD_DIR)/board_spi.c
 
 $(BINDIR)/baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
 $(BINDIR)/$(BOARD_DIR)/board_spi.o: CFLAGS=$(CFLAGS_GCCEXT) -w -Dasm=__asm__
 $(BINDIR)/services/serialboot/serialboot.o: CFLAGS += -DSERIALBOOT_UART_INDEX=1
 endif
+
+
+ifdef CONFIG_SERVICE_SPI_FLASH
+INCLUDES += -Ibaremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi
+EXTRA_SRCS-$(CONFIG_SERVICE_SERIALBOOT) += \
+    baremetal/polarfire-soc-bare-metal-library/src/platform/drivers/mss/mss_spi/mss_spi.c \
+    $(BOARD_DIR)/board_spi.c
+
+endif
+
 
 ifdef CONFIG_SERVICE_NETBOOT
 
@@ -122,8 +128,7 @@ INCLUDES += -Iservices/netboot \
             -I$(MSS_ETH_DIR)
 
 SRCS-$(CONFIG_SERVICE_NETBOOT) += \
-    services/netboot/netboot_service.c \
-	boards/mpfs-disco-kit/board_eth.c \
+    boards/mpfs-disco-kit/board_eth.c \
     $(MSS_ETH_DIR)/mss_ethernet_mac.c \
     $(MSS_ETH_DIR)/vsc8221_phy.c \
     $(MSS_ETH_DIR)/null_phy.c

@@ -19,13 +19,15 @@ config SPI_FLASH_CORESPI
 config SPI_FLASH_MSS_SPI
 	bool "MSS SPI Peripheral (MPFS HAL MSS_SPI driver)"
 
-endchoice
-
 config SERVICE_BOOT_SPI_FLASH_OFFSET
 	hex "SPI Flash Boot Payload Offset"
 	default 0x400
 	help
 	  Byte offset in external SPI NOR flash where the HSS boot image starts
 	  (default 0x400).
+
+endchoice
+
+
 
 endif # SERVICE_SPI_FLASH
