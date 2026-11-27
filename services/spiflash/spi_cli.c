@@ -1,13 +1,16 @@
 #include "config.h"
 #include "hss_types.h"
 #include "hss_debug.h"
-#include "services/spi/spi_flash.h"
+#include "services/spiflash/spi_flash.h"
 #include "hss_boot_service.h"
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+
+void HSS_BootSelectSPI(void);
 
 #ifndef CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET
 #define CONFIG_SERVICE_BOOT_SPI_FLASH_OFFSET 0x400UL
@@ -66,10 +69,10 @@ static unsigned long spi_cli_strtoul_(const char *nptr)
 static void spi_cli_print_usage_(void)
 {
     mHSS_PUTS("Usage:\n"
-              "  SPI                      - Select boot via SPI\n"
-              "  SPI ID                   - Read SPI Flash JEDEC ID and info\n"
-              "  SPI WRITE <addr> <off> <len> - Program DDR buffer to SPI Flash at offset\n"
-              "  SPI BOOT [offset]        - Boot payload from SPI Flash (default 0x400)\n"
+              "  SPIFLASH                      - Select boot via SPI\n"
+              "  SPIFLASH  ID                   - Read SPI Flash JEDEC ID and info\n"
+              "  SPIFLASH  WRITE <addr> <off> <len> - Program DDR buffer to SPI Flash at offset\n"
+              "  SPIFLASH  BOOT [offset]        - Boot payload from SPI Flash (default 0x400)\n"
               "\n");
 }
 
@@ -143,17 +146,9 @@ static void spi_cli_boot_(size_t argc, char * const argv[])
     (void)HSS_Boot_DecodeAndBootDDR(ddr_dest, img_len);
 }
 
-void HSS_SPI_CLI(size_t argc, char * const argv[])
+void HSS_SPIFLASH_CLI(size_t argc, char * const argv[])
 {
-    if (!argv || argc <= 1u) {
-#if defined(CONFIG_SERVICE_SPI)
-        HSS_BootSelectSPI();
-#else
-        mHSS_PUTS("SPI not supported in this build of the HSS.\n");
-#endif
-        return;
-    }
-
+ 
     const char *subcmd = argv[1];
 
     if (spi_cli_streq_nocase_(subcmd, "ID")) {

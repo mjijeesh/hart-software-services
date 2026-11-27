@@ -26,7 +26,7 @@
 #endif
 
 #if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
-#include "services/spi/spi_flash.h"
+#include "services/spiflash/spi_flash.h"
 #endif
 
 #ifndef PRV_M

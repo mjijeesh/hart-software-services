@@ -95,4 +95,3 @@ static void spi_lastState_handler(struct StateMachine * const pMyMachine)
 {
     pMyMachine->state = SPI_INITIALIZATION;
 }
-

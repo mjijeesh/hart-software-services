@@ -3,6 +3,7 @@
 #include "spi_flash.h"
 #include "hss_debug.h"
 #include "hss_boot_service.h"
+
 #if IS_ENABLED(CONFIG_SERVICE_WDOG)
 #  include "wdog_service.h"
 #endif

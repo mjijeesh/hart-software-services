@@ -1,0 +1,31 @@
+config SERVICE_SPI_FLASH
+	bool "SPI Flash Driver and CLI Support"
+	default y if SERVICE_SPI || SERVICE_NETBOOT || SERVICE_SERIALBOOT
+	help
+	  Enables external SPI NOR flash read, erase, program, and CLI support.
+
+
+if SERVICE_SPI_FLASH
+
+choice
+	prompt "SPI Flash Controller Backend"
+	default SPI_FLASH_CORESPI if BOARD_MPFS_ICICLE_KIT
+	default SPI_FLASH_MSS_SPI if BOARD_MPFS_DISCO_KIT
+	default SPI_FLASH_CORESPI
+
+config SPI_FLASH_CORESPI
+	bool "FPGA Fabric CoreSPI (Board BSP hooks in board_spi.c)"
+
+config SPI_FLASH_MSS_SPI
+	bool "MSS SPI Peripheral (MPFS HAL MSS_SPI driver)"
+
+endchoice
+
+config SERVICE_BOOT_SPI_FLASH_OFFSET
+	hex "SPI Flash Boot Payload Offset"
+	default 0x400
+	help
+	  Byte offset in external SPI NOR flash where the HSS boot image starts
+	  (default 0x400).
+
+endif # SERVICE_SPI_FLASH

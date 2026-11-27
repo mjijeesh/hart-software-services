@@ -40,7 +40,7 @@ void spi_flash_storage_get_info(uint32_t *pBlockSize, uint32_t *pEraseSize, uint
 
 #endif
 
-void HSS_SPI_CLI(size_t argc, char * const argv[]);
+void HSS_SPIFLASH_CLI(size_t argc, char * const argv[]);
 
 
 #endif /* HSS_SPI_FLASH_H */
