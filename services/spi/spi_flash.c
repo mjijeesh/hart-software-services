@@ -1,10 +1,14 @@
-#include "spi_flash.h"
+#include "config.h"
 #include "hss_types.h"
+#include "spi_flash.h"
 #include "hss_debug.h"
 #include "hss_boot_service.h"
+#if IS_ENABLED(CONFIG_SERVICE_WDOG)
+#  include "wdog_service.h"
+#endif
 #include <string.h>
 
-/* Weak HAL hooks overridden by per-board strong definitions in board_spi.c or spi_flash_mss.c */
+/* Weak HAL hooks overridden by per-board strong definitions in board_spi.c */
 __attribute__((weak)) void bsp_spi_init(void) {}
 __attribute__((weak)) void bsp_spi_select(void) {}
 __attribute__((weak)) void bsp_spi_deselect(void) {}
@@ -31,6 +35,7 @@ __attribute__((weak)) void bsp_spi_transfer(const uint8_t *tx, uint16_t tx_len, 
 #define CMD_SST26_ULBPR       0x98  /* Global Block-Protection Unlock (SST26) */
 
 static struct spi_flash_info active_flash;
+static bool flash_initialized = false;
 
 static void spi_write_enable(void)
 {
@@ -105,6 +110,10 @@ void spi_flash_global_unprotect(void)
 
 void spi_flash_init(void)
 {
+    if (flash_initialized && (active_flash.mfr_id != 0x00u) && (active_flash.mfr_id != 0xFFu)) {
+        return;
+    }
+
     bsp_spi_init();
 
     uint8_t mfr = 0, dev = 0, cap = 0;
@@ -152,6 +161,10 @@ void spi_flash_init(void)
 
     /* Unlock block protection so erase/write operations work immediately */
     spi_flash_global_unprotect();
+
+    if ((active_flash.mfr_id != 0x00u) && (active_flash.mfr_id != 0xFFu)) {
+        flash_initialized = true;
+    }
 }
 
 void spi_flash_read(uint32_t address, uint8_t *rx_buf, size_t len)
@@ -270,7 +283,7 @@ bool spi_flash_write_payload(uint32_t spi_offset, uintptr_t ddr_addr, size_t byt
     spi_flash_init();
     const struct spi_flash_info *info = spi_flash_get_info();
     if (!info || info->mfr_id == 0x00 || info->mfr_id == 0xFF) {
-        mHSS_PRINTF("[SPI-FLASH] ERROR: No CoreSPI Flash detected (JEDEC ID: 0x%02X).\n",
+        mHSS_PRINTF("[SPI-FLASH] ERROR: No SPI Flash detected (JEDEC ID: 0x%02X).\n",
                     info ? info->mfr_id : 0xFF);
         return false;
     }
@@ -314,3 +327,48 @@ bool spi_flash_write_payload(uint32_t spi_offset, uintptr_t ddr_addr, size_t byt
     mHSS_PRINTF("[SPI-FLASH] ERROR: Read-back verification failed at 0x%x!\n", spi_offset);
     return false;
 }
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+bool spi_flash_storage_init(void)
+{
+    spi_flash_init();
+    if ((active_flash.mfr_id == 0x00u) || (active_flash.mfr_id == 0xFFu)) {
+        mHSS_DEBUG_PRINTF(LOG_ERROR, "[SPI-FLASH] Flash not detected during boot init\n");
+        return false;
+    }
+    return true;
+}
+
+bool spi_flash_storage_read_block(void *pDest, size_t srcOffset, size_t byteCount)
+{
+    if (!pDest || (byteCount == 0u)) {
+        return false;
+    }
+
+    if (!spi_flash_storage_init()) {
+        return false;
+    }
+
+    uint8_t *dst = (uint8_t *)pDest;
+    size_t offset = 0u;
+
+    while (offset < byteCount) {
+#if IS_ENABLED(CONFIG_SERVICE_WDOG)
+        HSS_Wdog_E51_Tickle();
+#endif
+        size_t chunk = ((byteCount - offset) > 4096u) ? 4096u : (byteCount - offset);
+        spi_flash_read((uint32_t)(srcOffset + offset), dst + offset, chunk);
+        offset += chunk;
+    }
+
+    return true;
+}
+
+void spi_flash_storage_get_info(uint32_t *pBlockSize, uint32_t *pEraseSize, uint32_t *pBlockCount)
+{
+    (void)spi_flash_storage_init();
+    if (pBlockSize)  *pBlockSize  = active_flash.page_size ? active_flash.page_size : 256u;
+    if (pEraseSize)  *pEraseSize  = active_flash.erase_size ? active_flash.erase_size : 0x10000u;
+    if (pBlockCount) *pBlockCount = 65536u;
+}
+#endif

@@ -123,11 +123,12 @@ struct tinycli_toplevel_cmd_safe {
 
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
 #    include "services/serialboot/serialboot.h"
-
     static void tinyCLI_SerialBoot_(void);
-    static void tinyCLI_FlashId_(void);
-    static void tinyCLI_FlashBoot_(void);
 
+#endif
+
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+#    include "services/spi/spi_flash.h"
 #endif
 
 static unsigned long int tinyCLI_strtoul_wrapper_(const char *__restrict nptr);
@@ -354,9 +355,7 @@ static const struct tinycli_cmd toplevelCmds[] = {
     { CMD_ECC,     "ECC",   "Dump ECC stats.", tinyCLI_ECC_ },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ },
-    { CMD_FLASHID,    "FLASHID",    "Read SPI Flash JEDEC ID: FLASHID",                                                    tinyCLI_FlashId_ },
-    { CMD_FLASHBOOT,  "FLASHBOOT",  "Boot image from SPI Flash: FLASHBOOT <spi_offset>",                                   tinyCLI_FlashBoot_ },
+    { CMD_SERIALBOOT, "SERIALBOOT", "Receive binary over SFL and run/flash: SERIALBOOT [sd|emmc|spi|qspi] [addr/offset]", tinyCLI_SerialBoot_ }, 
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
     { CMD_NETBOOT, "NETBOOT", "Download and run/flash payload via TFTP: NETBOOT [sd|emmc|spi|qspi] [server_ip] [filename] [addr/offset]", tinyCLI_NetBoot_ },
@@ -396,9 +395,7 @@ static struct tinycli_toplevel_cmd_safe toplevelCmdsSafeAfterBootFlags[] = {
     { CMD_ECC,     false },
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SERIALBOOT)
-    { CMD_SERIALBOOT, true },
-    { CMD_FLASHID, true },
-    { CMD_FLASHBOOT, true },
+    { CMD_SERIALBOOT, true },   
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_NETBOOT) || defined(CONFIG_SERVICE_NETBOOT)
     { CMD_NETBOOT, true },
@@ -581,7 +578,7 @@ static void tinyCLI_NetBoot_(void)
 
 
 
-
+/*
 
 static void tinyCLI_FlashId_(void)
 {
@@ -598,7 +595,7 @@ static void tinyCLI_FlashBoot_(void)
 
     do_flashboot(offset);
 }
-
+*/
 
 /***********************************************************************/
 
@@ -1184,6 +1181,7 @@ static void tinyCLI_Payload_(void)
 #endif
 }
 
+/*
 static void tinyCLI_SPI_(void)
 {
 #if defined(CONFIG_SERVICE_SPI)
@@ -1192,6 +1190,20 @@ static void tinyCLI_SPI_(void)
     tinyCLI_UnsupportedBootMechanism_("SPI");
 #endif
 }
+*/
+
+
+static void tinyCLI_SPI_(void)
+{
+#if IS_ENABLED(CONFIG_SERVICE_SPI_FLASH)
+    HSS_SPI_CLI(argc_tokenCount, argv_tokenArray);
+#elif defined(CONFIG_SERVICE_SPI)
+    HSS_BootSelectSPI();
+#else
+    tinyCLI_UnsupportedBootMechanism_("SPI");
+#endif
+}
+
 
 static void tinyCLI_SNVM_(void)
 {
