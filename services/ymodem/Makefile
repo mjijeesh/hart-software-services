@@ -28,6 +28,7 @@
 
 SRCS-$(CONFIG_SERVICE_YMODEM) += \
 	services/ymodem/hss_ymodem_loader.c \
+	services/ymodem/hss_ymodem_cli.c \
 	services/ymodem/ymodem_protocol.c
 
 INCLUDES +=\

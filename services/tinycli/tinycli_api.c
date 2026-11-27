@@ -175,6 +175,8 @@ static void tinyCLI_MemTest_(void);
 #endif
 static void tinyCLI_UnsupportedBootMechanism_(char const * const pName);
 #if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+# include "ymodem.h"
+
 static void tinyCLI_YModem_(void);
 #endif
 #if IS_ENABLED(CONFIG_SERVICE_SCRUB)
@@ -945,6 +947,7 @@ static void tinyCLI_UnsupportedBootMechanism_(char const * const pName)
     HSS_BootListStorageProviders();
 }
 
+/* 
 #if IS_ENABLED(CONFIG_SERVICE_YMODEM)
 static void tinyCLI_YModem_(void)
 {
@@ -952,6 +955,17 @@ static void tinyCLI_YModem_(void)
     hss_loader_ymodem_loop();
 }
 #endif
+
+*/
+
+#if IS_ENABLED(CONFIG_SERVICE_YMODEM)
+static void tinyCLI_YModem_(void)
+{
+    HSS_YModem_CLI(argc_tokenCount, argv_tokenArray);
+}
+#endif
+
+
 
 #if IS_ENABLED(CONFIG_SERVICE_SCRUB)
 static void tinyCLI_Scrub_(void)
