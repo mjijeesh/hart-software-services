@@ -21,4 +21,7 @@ void bsp_serialboot_uart_tx(const uint8_t *data, size_t len);
 /* Auto-detects HSS_BootImage (0xb007c0de / compressed) vs raw flat binary and boots U54s */
 //bool HSS_Boot_DecodeAndBootDDR(uintptr_t ddr_addr, size_t byte_count);
 
+
+void HSS_SerialBoot_CLI(size_t argc, char * const argv[]);
+
 #endif /* HSS_SERIALBOOT_H */
